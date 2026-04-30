@@ -26,3 +26,6 @@ Desktop.ini
 
 # Cursor 本地状态（可选：若希望同步规则可删掉下一行）
 .cursor/
+
+# SQL 导出 / 运行产物（勿提交，避免敏感数据与仓库体积）
+data/**/*.json
