@@ -1,0 +1,365 @@
+"""
+数据完整性验证脚本（动态调度版，支持新增 SQL/JSON）
+
+设计目标：
+1. **前置完整性检查**：先确认 data/ 下的 JSON 集合等于 code/sql/ 下的 SQL 集合，
+   缺一个就 hard fail，强制要求先把 run_all.py 跑完。
+2. **注册表调度**：`VALIDATORS` 字典维护 `文件名 → 验证函数`，新增数据时：
+   - 有验证规则 → 在 VALIDATORS 注册
+   - 没规则 → 自动 [SKIP] 提示，不阻塞流程
+3. **不要在这里硬编码业务字段索引**，所有索引按 `header` 真实顺序解析。
+"""
+import json
+import sys
+import io
+from pathlib import Path
+from datetime import datetime
+from collections import defaultdict
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+
+# 项目根：本文件位于 code/python/03_validate_data/ → parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DATA_DIR = PROJECT_ROOT / 'data'
+SQL_DIR = PROJECT_ROOT / 'code' / 'sql'
+
+
+def _is_null(v):
+    return v is None or v == '' or v == 'NULL'
+
+
+def _to_float(v, default=0.0):
+    if _is_null(v):
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _load(filename):
+    fp = DATA_DIR / filename
+    if not fp.exists():
+        return None
+    with open(fp, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _expected_json_name(sql_path: Path) -> str:
+    """01_s_class_all.sql → s_class_all.json（与 run_all.py 的 output_name 同步）"""
+    import re
+    return re.sub(r'^\d+_', '', sql_path.stem) + '.json'
+
+
+# ================== 前置：完整性检查 ==================
+
+def precheck_completeness() -> bool:
+    """对比 code/sql/*.sql 与 data/*.json，必须一一对应才能继续验证。"""
+    print("\n" + "=" * 60)
+    print("前置：数据完整性检查（确保所有 SQL 都已落盘）")
+    print("=" * 60)
+
+    sql_files = sorted(SQL_DIR.glob('*.sql'))
+    expected_jsons = {_expected_json_name(f) for f in sql_files}
+    actual_jsons = {f.name for f in DATA_DIR.glob('*.json') if not f.name.startswith('_')}
+
+    missing = expected_jsons - actual_jsons
+    extra = actual_jsons - expected_jsons
+
+    print(f"  SQL 文件: {len(sql_files)} 个 ({SQL_DIR})")
+    print(f"  JSON 文件: {len(actual_jsons)} 个 ({DATA_DIR})")
+
+    if missing:
+        print(f"\n  ✗ 缺失 {len(missing)} 个 JSON（请先跑 run_all.py）：")
+        for m in sorted(missing):
+            print(f"      - {m}")
+        return False
+
+    if extra:
+        print(f"\n  ⚠ 额外 {len(extra)} 个 JSON（无对应 SQL，可能是历史遗留）：")
+        for e in sorted(extra):
+            print(f"      - {e}")
+        # 额外文件不阻塞，只警告
+
+    print(f"\n  ✓ 所有 SQL 都已落盘（{len(expected_jsons)} 个 JSON）")
+    return True
+
+
+# ================== 各类数据验证函数 ==================
+
+def validate_s_class(filename, desc=""):
+    """S 类案件验证（ALL/NEW/MTD 三个口径共用）"""
+    print(f"\n[{desc or filename}]")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在")
+        return False
+
+    header = data['header']
+    rows = data['rows']
+    idx = {name: i for i, name in enumerate(header)}
+    print(f"  行数: {len(rows)}")
+
+    months = defaultdict(int)
+    for row in rows:
+        months[row[idx['p_month']]] += 1
+    print("  月份分布: " + ", ".join(f"{m}:{c}" for m, c in sorted(months.items())))
+
+    per_day = defaultdict(int)
+    for row in rows:
+        per_day[(row[idx['p_month']], row[idx['day']])] += 1
+    bad_days = [k for k, v in per_day.items() if v != 3]
+    if bad_days:
+        print(f"  ✗ 有 {len(bad_days)} 天非 3 条记录: {bad_days[:3]}...")
+        return False
+    print(f"  ✓ 全部 {len(per_day)} 天均为 3 条 (S1/S2/S3)")
+
+    types = {row[idx['case_type']] for row in rows}
+    if types != {'S1', 'S2', 'S3'}:
+        print(f"  ✗ 案件类型异常: {types}")
+        return False
+
+    is_mtd = ('mtd' in filename.lower())
+    invalid = []
+    for row in rows:
+        assigned = _to_float(row[idx['assigned_principal']])
+        repaid = _to_float(row[idx['repaid_principal']])
+        if assigned <= 0:
+            continue
+        rate = repaid / assigned * 100
+        if not is_mtd and rate > 100:
+            invalid.append((row[idx['p_month']], row[idx['day']],
+                            row[idx['case_type']], rate))
+    if invalid:
+        print(f"  ⚠ 有 {len(invalid)} 条回款率 > 100%（ALL/NEW 口径罕见）")
+        for m, d, c, r in invalid[:3]:
+            print(f"      {m}-{d} {c}: {r:.2f}%")
+    else:
+        print("  ✓ 回款率正常" + (" (MTD 允许 > 100%)" if is_mtd else "（≤ 100%）"))
+    return True
+
+
+def validate_m1(filename, desc="M1分案回款"):
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在"); return False
+    header = data['header']
+    rows = data['rows']
+    idx = {name: i for i, name in enumerate(header)}
+    print(f"  行数: {len(rows)}")
+
+    months = defaultdict(int)
+    for row in rows:
+        months[row[idx['assigned_month']]] += 1
+    print("  月份分布: " + ", ".join(f"{m}:{c}" for m, c in sorted(months.items())))
+
+    if len(months) < 3:
+        print(f"  ✗ 月份不足 3 个: {sorted(months)}"); return False
+    print(f"  ✓ 覆盖 {len(months)} 个月")
+
+    types = {row[idx['case_type']] for row in rows}
+    if types != {'新案', '老案'}:
+        print(f"  ✗ 案件类型异常: {types}"); return False
+    print("  ✓ 案件类型: 新案 / 老案")
+
+    null_count = sum(1 for r in rows
+                     if _is_null(r[idx['repaid_principal']]) or _is_null(r[idx['repaid_case_cnt']]))
+    if null_count:
+        print(f"  ⚠ 有 {null_count} 条 repaid_* 为 NULL（多为最新尚未成熟数据）")
+    else:
+        print("  ✓ repaid_* 均非空")
+
+    invalid = []
+    for row in rows:
+        assigned = _to_float(row[idx['assigned_principal']])
+        repaid = _to_float(row[idx['repaid_principal']])
+        if assigned <= 0 or _is_null(row[idx['repaid_principal']]):
+            continue
+        rate = repaid / assigned * 100
+        if rate > 100:
+            invalid.append((row[idx['assigned_month']], row[idx['month_day']],
+                            row[idx['case_type']], rate))
+    if invalid:
+        print(f"  ✗ 有 {len(invalid)} 条回款率 > 100%")
+        for m, d, c, r in invalid[:3]:
+            print(f"      {m} {d} {c}: {r:.2f}%")
+        return False
+    print("  ✓ 回款率均 ≤ 100%")
+    return True
+
+
+def validate_m0(filename, desc="M0账单"):
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在"); return False
+
+    header = data['header']
+    rows = data['rows']
+    idx = {name: i for i, name in enumerate(header)}
+    print(f"  行数: {len(rows)}")
+
+    is_grouped = 'grouped' in filename.lower()
+    dates = set()
+    per_date = defaultdict(int)
+    for row in rows:
+        d = row[idx['billing_date']]
+        dates.add(d)
+        per_date[d] += 1
+
+    min_d, max_d = min(dates), max(dates)
+    print(f"  日期范围: {min_d} ~ {max_d}, 独立日期 {len(dates)} 天")
+
+    start = datetime.strptime(min_d, '%Y-%m-%d')
+    end = datetime.strptime(max_d, '%Y-%m-%d')
+    expected_days = (end - start).days + 1
+    if len(dates) != expected_days:
+        print(f"  ✗ 日期不连续: 期望 {expected_days} 天，实际 {len(dates)} 天")
+        return False
+    print(f"  ✓ 日期连续 ({expected_days} 天)")
+
+    expected_per_day = 2 if is_grouped else 1
+    bad = [d for d, c in per_date.items() if c != expected_per_day]
+    if bad:
+        print(f"  ✗ 有 {len(bad)} 天每日记录数不是 {expected_per_day}: {bad[:3]}...")
+        return False
+    print(f"  ✓ 每天 {expected_per_day} 条记录")
+    return True
+
+
+def validate_grp(filename, desc="GRP催收员"):
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在"); return False
+    header = data['header']
+    rows = data['rows']
+    idx = {name: i for i, name in enumerate(header)}
+    print(f"  行数: {len(rows)}")
+
+    months = defaultdict(int)
+    for row in rows:
+        months[row[idx['mth']]] += 1
+    print("  月份分布: " + ", ".join(f"{m}:{c}" for m, c in sorted(months.items())))
+    if len(months) < 2:
+        print(f"  ✗ 月份不足 2 个: {sorted(months)}"); return False
+    print(f"  ✓ 覆盖 {len(months)} 个月")
+
+    types = sorted({row[idx['case_type']] for row in rows})
+    print(f"  案件类型 ({len(types)}): {types}")
+    collectors = sorted({row[idx['collector_ins']] for row in rows})
+    print(f"  催收员 ({len(collectors)}): {collectors}")
+
+    null_count = sum(1 for r in rows
+                     if _is_null(r[idx['repaid_principal']]) or _is_null(r[idx['mtd_daily_assign_amt']]))
+    if null_count:
+        print(f"  ⚠ 有 {null_count} 条记录 repaid_principal / mtd_daily_assign_amt 为空")
+    else:
+        print("  ✓ 必填字段完整")
+    return True
+
+
+def validate_avg_eff_worktim(filename, desc="人均工作时长"):
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在"); return False
+
+    header = data['header']
+    rows = data['rows']
+    idx = {name: i for i, name in enumerate(header)}
+    print(f"  行数: {len(rows)}")
+
+    months = defaultdict(int)
+    for row in rows:
+        months[row[idx['p_month']]] += 1
+    print("  月份分布: " + ", ".join(f"{m}:{c}" for m, c in sorted(months.items())))
+
+    area_types = sorted({row[idx['area_type']] for row in rows})
+    print(f"  area_type: {area_types}")
+
+    empty_curr = sum(1 for r in rows if _is_null(r[idx['avg_eff_worktime']]))
+    if empty_curr:
+        print(f"  ✗ 有 {empty_curr} 条当月 avg_eff_worktime 为空")
+        return False
+    print("  ✓ 当月 avg_eff_worktime 均非空")
+    return True
+
+
+# ================== 注册表 ==================
+# key = JSON 文件名（与 run_all.py 输出一致）
+# value = (验证函数, 描述)
+# 新增数据时：写好验证函数，在这里注册一行即可
+VALIDATORS = {
+    's_class_all.json':              (validate_s_class,         'S类·ALL口径'),
+    's_class_new.json':              (validate_s_class,         'S类·NEW口径'),
+    's_class_mtd.json':              (validate_s_class,         'S类·MTD口径'),
+    'm1_assignment_repayment.json':  (validate_m1,              'M1分案回款'),
+    'm0_billing.json':               (validate_m0,              'M0账单'),
+    'm0_billing_grouped.json':       (validate_m0,              'M0账单·分组'),
+    'grp_collector.json':            (validate_grp,             'GRP催收员'),
+    'avg_eff_worktim.json':          (validate_avg_eff_worktim, '人均有效工时'),
+    'avg_eff_call_worktim.json':     (validate_avg_eff_worktim, '人均通话工时'),
+    'avg_eff_wa_worktim.json':       (validate_avg_eff_worktim, '人均WA工时'),
+}
+
+
+# ================== 主流程 ==================
+
+def main():
+    print("=" * 60)
+    print("数据完整性 + 业务规则验证")
+    print("=" * 60)
+    print(f"  数据目录: {DATA_DIR}")
+    print(f"  SQL 目录: {SQL_DIR}")
+
+    # 步骤 1: 前置完整性检查（缺文件直接退出）
+    if not precheck_completeness():
+        print("\n" + "=" * 60)
+        print("✗ 数据不完整，请先跑 run_all.py 落盘缺失的 JSON")
+        print("=" * 60)
+        return 2
+
+    # 步骤 2: 按注册表调度验证
+    print("\n" + "=" * 60)
+    print("业务规则验证（按注册表）")
+    print("=" * 60)
+
+    actual_jsons = sorted(f.name for f in DATA_DIR.glob('*.json') if not f.name.startswith('_'))
+    results = {}
+    skipped = []
+
+    for jname in actual_jsons:
+        if jname in VALIDATORS:
+            fn, desc = VALIDATORS[jname]
+            try:
+                results[jname] = fn(jname, desc)
+            except Exception as e:
+                print(f"\n[ERR] {jname} 验证抛出异常: {e!r}")
+                results[jname] = False
+        else:
+            skipped.append(jname)
+
+    # 步骤 3: 汇总
+    print("\n" + "=" * 60)
+    print("验证结果汇总")
+    print("=" * 60)
+    for jname, ok in results.items():
+        print(f"  {'✓ 通过' if ok else '✗ 失败'}  {jname}")
+    if skipped:
+        print(f"\n  [SKIP] 以下 {len(skipped)} 个文件无验证规则（如需校验，请在 VALIDATORS 注册）：")
+        for s in skipped:
+            print(f"      - {s}")
+
+    all_passed = all(results.values()) if results else False
+    print("\n" + "=" * 60)
+    if all_passed:
+        print(f"✓ 全部 {len(results)} 个文件验证通过，可以开始画图")
+        return 0
+    print("✗ 数据验证失败，请检查上方 ✗ 项")
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -1,0 +1,12 @@
+# 从项目根 feishu_app.json 读取凭证并请求 tenant_access_token（勿提交 feishu_app.json）
+$ErrorActionPreference = "Stop"
+$cfgPath = Join-Path $PSScriptRoot "feishu_app.json"
+if (-not (Test-Path $cfgPath)) {
+    Write-Host "缺少 $cfgPath — 请先复制 feishu_app.example.json 为 feishu_app.json 并填写 app_id、app_secret。" -ForegroundColor Red
+    exit 1
+}
+$cfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$headers = @{ "Content-Type" = "application/json" }
+$body = @{ app_id = $cfg.app_id; app_secret = $cfg.app_secret } | ConvertTo-Json
+$response = Invoke-WebRequest -Uri "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal" -Method POST -Headers $headers -Body $body
+Write-Output $response.Content

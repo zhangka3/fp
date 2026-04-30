@@ -1,0 +1,28 @@
+# 本地密钥（勿提交 Git；交接项目时请用安全方式单独拷贝给接收方）
+.env
+.env.*
+*.local.ps1
+get_token.ps1
+feishu_app.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# 临时与本地测试产物
+temp_dump/
+*.log
+test_write*.txt
+temp_test.txt
+tmp_*.json
+.temp_*.json
+
+# 操作系统
+Thumbs.db
+Desktop.ini
+
+# Cursor 本地状态（可选：若希望同步规则可删掉下一行）
+.cursor/
