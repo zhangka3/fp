@@ -1,6 +1,6 @@
 ---
 name: wkrpt
-description: 周报自动化 - SQL→JSON→校验→图表；首次须输出前置条件表（含是否满足/理由与处理方法列）并按 Skill 内分项检查体系在本机逐项自检（MCP/网络/依赖/飞书）
+description: 周报自动化 - SQL→JSON→校验→图表；首次须输出前置条件表（含是否满足/理由与处理方法列）并按 Skill 内分项检查体系在本机逐项自检（MCP/网络/依赖/飞书）；可选 Git 同步时须先让用户选择 GitHub / Gitee / 两者
 ---
 
 # 周报自动化完整流程
@@ -139,6 +139,10 @@ description: 周报自动化 - SQL→JSON→校验→图表；首次须输出前
 - 清除旧图表（按类型分组清理）
 - 依次运行5个图表生成脚本
 - 输出39张PNG图表到 `screenshots/` 目录
+
+### 步骤6（可选）：同步到 Git 远端
+- 仅当用户**明确要求**把本仓库推送到 GitHub 和/或 Gitee 时执行；**须先请用户选择**推送到哪一侧或两侧。
+- 具体命令、远程名与注意事项见下文 **「Git 同步到远端（GitHub / Gitee）」**。
 
 ## 数据映射
 
@@ -501,7 +505,73 @@ python screen_grp.py
 python screen_avg_eff_worktime.py
 ```
 
+## Git 同步到远端（GitHub / Gitee）
+
+在周报流程或仓库改动结束后，如需把**代码与文档**推到远端，按本节执行。**不要**把 `data/**/*.json`、`screenshots/**`（运行生成的 PNG）、飞书密钥等提交上去（项目根 `.gitignore` 已排除；勿使用 `git add -f` 强行纳入）。
+
+### Agent 必须先确认目的地
+
+**在执行任何 `git push` 之前**，须向用户明确提问并让其一选：
+
+1. **仅 GitHub**（默认远程名一般为 `origin`）
+2. **仅 Gitee**（远程名一般为 `gitee`）
+3. **两个都要**（依次 push）
+
+用户选定后再执行对应推送；不得默认替用户选远端。
+
+### 远程地址约定（与当前仓库一致时可照抄）
+
+| 用途 | 远程名 | 示例 URL |
+|------|--------|----------|
+| GitHub | `origin` | `https://github.com/zhangka3/fp.git` |
+| Gitee | `gitee` | `https://gitee.com/zhangka3/fp.git` |
+
+若本地尚未添加远程：
+
+```bash
+# GitHub（按需）
+git remote add origin https://github.com/zhangka3/fp.git
+
+# Gitee（按需）
+git remote add gitee https://gitee.com/zhangka3/fp.git
+```
+
+查看已有远程：`git remote -v`。
+
+### 标准推送流程（在项目根执行）
+
+```bash
+git status
+git add -A    # 确认状态里没有不应提交的密钥或 data 下 JSON
+git commit -m "描述本次改动（一句话）"
+```
+
+按用户选择执行其一或依次执行：
+
+```bash
+# 用户选「仅 GitHub」
+git push -u origin main
+
+# 用户选「仅 Gitee」
+git push -u gitee main
+
+# 用户选「两个都要」
+git push origin main
+git push gitee main
+```
+
+分支名以本地实际为准（常见为 `main`）；若跟踪分支已设好，可简写为 `git push origin`、`git push gitee`。
+
+### 认证与网络提示
+
+- **HTTPS**：首次推送可能弹出登录或使用 **私人令牌 / PAT**（Gitee：**设置 → 私人令牌**；GitHub：**Settings → Developer settings**）。Windows 可依赖 **Git Credential Manager**；认证失败时检查凭据管理器里是否存错账号（例如把 GitHub 密码当成了 Gitee）。
+- **国内网络**：Gitee 通常更稳定；需要双备份时再推 GitHub。
+- **历史注意**：曾提交过的敏感文件若已从当前版本删除，旧提交里仍可能存在；高合规场景需单独做历史清理（如 `git filter-repo`）并谨慎 force push。
+
 ## 更新记录
+
+**2026-04-30**
+- ✓ 文档末尾新增「Git 同步到远端」：须让用户选择 GitHub / Gitee / 两者；说明远程名、推送命令与勿提交 `data/*.json`、`screenshots/**` 与密钥
 
 **2026-04-27**
 - ✓ 新增人均有效工作时长图表（08_avg_eff_worktim.sql）
@@ -523,4 +593,4 @@ python screen_avg_eff_worktime.py
 ---
 
 **维护者**：Claude Code
-**最后更新**：2026-04-30（补充前置条件表与首次自检指令；校正 SQL/JSON 文件名与图表数量说明）
+**最后更新**：2026-04-30（Git 同步章节：用户选择 GitHub/Gitee/两者；前置条件表与 SQL/JSON/图表说明校正）

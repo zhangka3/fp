@@ -29,3 +29,6 @@ Desktop.ini
 
 # SQL 导出 / 运行产物（勿提交，避免敏感数据与仓库体积）
 data/**/*.json
+
+# 图表导出（本地运行产物，勿提交）
+screenshots/**
