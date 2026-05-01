@@ -572,6 +572,7 @@ git push gitee main
 
 **2026-04-30**
 - ✓ 文档末尾新增「Git 同步到远端」：须让用户选择 GitHub / Gitee / 两者；说明远程名、推送命令与勿提交 `data/*.json`、`screenshots/**` 与密钥
+- ✓ 仓库不再跟踪 `screenshots/**`（`.gitignore`）；图表仅本地生成
 
 **2026-04-27**
 - ✓ 新增人均有效工作时长图表（08_avg_eff_worktim.sql）
