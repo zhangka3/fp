@@ -1,155 +1,60 @@
-# Screenshots生成模块
+# 图表生成模块（`code/screens/`）
 
-本目录包含4个画图脚本，用于生成周报所需的所有图表。
+本目录包含周报所需的 **`screen_*.py`** 画图脚本及编排入口。**推荐**在项目根执行 **`python code/screens/run_all_screens.py`**：自动发现全部 `screen_*.py`，子进程隔离运行（单脚本超时 300s）。
 
-## 文件说明
+```powershell
+# 项目根
+python code/screens/run_all_screens.py           # 全部
+python code/screens/run_all_screens.py --list    # 仅列出脚本
+python code/screens/run_all_screens.py screen_grp # 只跑匹配项（见脚本 --help）
+```
 
-### 1. screen_s_class.py
-生成S类回款率图表（共15张）
+## 脚本与数据源 / 产出（摘要）
 
-**数据源:**
-- `../../data/s_class_all.json` - S类整体数据
-- `../../data/s_class_new.json` - S类新案数据
-- `../../data/s_class_mtd.json` - S类老案数据
+| 脚本 | 主要数据源（`data/`） | 产出示例（`screenshots/`） |
+|------|------------------------|----------------------------|
+| `screen_s_class.py` | `s_class_all.json`、`s_class_new.json`、`s_class_mtd.json` | `recovery_rate_*.png`、组合图、`recovery_rate_S_table_*.png`（约 15 张量级） |
+| `screen_m1.py` | `m1_assignment_repayment.json` | `assignment_repayment_*.png`、`assignment_repayment_table_*.png`（柱线 + 表图） |
+| `screen_m0.py` | **`m0_billing.json`**、**`m0_billing_grouped.json`**（与 `run_all` 命名一致） | `m0_*.png`（约 8 张） |
+| `screen_grp.py` | **`grp_collector.json`** | `grp_*.png`（按数据中 `case_type`，约 12 张） |
+| `screen_avg_eff_worktime.py` | `avg_eff_worktim.json` 等（存在则画） | `avg_eff_worktime.png`、`avg_eff_call_worktime.png`、`avg_eff_wa_worktime.png`（1～3 张） |
+| `screen_m2_m6.py` | `M2_class_all.json`、`M6_class_all.json` | `recovery_rate_M2_*.png`、`recovery_rate_M6_*.png` 及对比表（共 4 张） |
+| **`screen_case_stock.py`** | **`case_stock.json`**（需含 `case_group_type`、`col_type` 等字段） | **`case_stock_9grid.png`**（3×3 柱线 + 每列下方折线数值表；详见下文） |
 
-**输出图表:**
-- S1/S2/S3 各3张单独图表 (ALL/NEW/MTD) - 共9张
-- S类组合图3张 (recovery_rate_S_combined_*.png)
-- S类对比表3张 (recovery_rate_S_table_*.png)
+视觉主题见同目录 **`chart_theme.py`**（各脚本 `import chart_theme` 后 `apply_chart_theme()`）。
 
-**运行方法:**
-```bash
-# 在项目根目录下执行
+## `screen_case_stock.py`（人均库存看板）
+
+- **依赖**：`data/case_stock.json`（由 `code/sql/13_case_stock.sql` 经 `run_all.py` 导出）。
+- **输出**：`screenshots/case_stock_9grid.png`。
+- **结构**：3 行 × 3 列——行：**人均库存 / 案件数 / 分案人数**；列：**非预测外呼 / 预测外呼 / 整体**。
+- **柱**：前两列为按 **`case_group_type`** 堆叠（顺序 S1→S2→S3，组内 RA→RB→RC→RD）；**整体**列在案件数/分案人数行按 **`col_type`** 两叠；人均库存行整体列为「非预测 / 预测」两叠，高度取自 **第 1、2 列折线序列**（分列 `line_metrics` 人均库存）。
+- **折线**：仅 **第一行人均库存** 绘制，透明度约 50%；**第三列**折线点为 **不拆分 `col_type`** 的整体 **`line_metrics`**（与该行第三列表格一致）；第二、三行不画折线。
+- **表格**：每个子图下方一行表，填对应折线各月取值（四舍五入整数、完整数字无 k/M）；第三列第一行表 = 整体人均库存折线，与图中红线一致。
+- **坐标**：图上不显示月份（表格表头为月份）；同一行内 **第 1、2 列共用 Y 轴量程**，第 3 列独立；左轴无刻度。
+
+单独调试：
+
+```powershell
 cd code/screens
-python screen_s_class.py
+python screen_case_stock.py
 ```
 
-### 2. screen_m1.py
-生成M1分案回款图表（共3张）
+## 输出目录与依赖
 
-**数据源:**
-- `../../data/m1_assignment_repayment.json`
+- 所有 PNG 默认写入项目根 **`screenshots/`**（脚本内 `Path(__file__).resolve().parent.parent.parent / "screenshots"`）。
+- **Python**：`matplotlib`、`numpy`；`screen_grp.py` 另需 **`pandas`**。
+- **字体**：需系统中文字体（如 Microsoft YaHei / SimHei / DengXian），否则标题可能方块字。
 
-**输出图表:**
-- assignment_repayment_overall.png - 整体分案回款
-- assignment_repayment_new.png - 新案分案回款
-- assignment_repayment_old.png - 老案分案回款
+## 批处理（可选）
 
-**运行方法:**
-```bash
-cd code/screens
-python screen_m1.py
-```
+同目录提供 **`run_all.bat`** / **`run_all.sh`**、以及 **`run_all_screens.py`**（动态发现，新增 `screen_*.py` 会自动纳入）。**首选 `run_all_screens.py`**。
 
-### 3. screen_m0.py
-生成M0逾期图表（共8张）
+## 更多文档
 
-**数据源:**
-- `../../data/m0_data.json` - M0每日数据
-- `../../data/m0_data_grouped.json` - M0分组数据（按首逾标识）
+- [`GRP_ROBUSTNESS.md`](GRP_ROBUSTNESS.md) — GRP 催收员缺失与对齐逻辑  
+- [`MIGRATION_NOTES.md`](MIGRATION_NOTES.md) — 迁移备忘  
 
-**输出图表:**
-- m0_principal_overdue_rate_monthly.png - 金额逾期率（月）
-- m0_count_overdue_rate_monthly.png - 单量逾期率（月）
-- m0_principal_overdue_rate_weekly.png - 金额逾期率（周）
-- m0_collection_rate_weekly.png - 金额催回率（周）
-- m0_collection_rate_7d_30d_monthly.png - 7d/30d催回率（月）
-- m0_ind1_ratio.png - 首逾用户占比
-- m0_collection_rate_7d_30d_monthly_ind0.png - 非首逾用户催回率
-- m0_collection_rate_7d_30d_monthly_ind1.png - 首逾用户催回率
+## 最后更新
 
-**运行方法:**
-```bash
-cd code/screens
-python screen_m0.py
-```
-
-### 4. screen_grp.py
-生成GRP催收员图表（共12张）
-
-**数据源:**
-- `../../data/grp_data.json`
-
-**输出图表:**
-- grp_API-M1.png
-- grp_M2.png
-- grp_M5+.png
-- grp_S1RA.png, grp_S1RB.png, grp_S1RC.png, grp_S1RD.png
-- grp_S2RA.png, grp_S2RB.png, grp_S2RC.png
-- grp_S3.png, grp_S3RB.png
-- （实际生成的图表取决于grp_data.json中的case_type）
-
-**运行方法:**
-```bash
-cd code/screens
-python screen_grp.py
-```
-
-## 一键生成所有图表
-
-可以创建一个批处理脚本来一次性生成所有图表：
-
-```bash
-# run_all.sh (Linux/Mac)
-#!/bin/bash
-cd "$(dirname "$0")"
-python screen_s_class.py
-python screen_m1.py
-python screen_m0.py
-python screen_grp.py
-```
-
-```batch
-# run_all.bat (Windows)
-@echo off
-cd /d %~dp0
-python screen_s_class.py
-python screen_m1.py
-python screen_m0.py
-python screen_grp.py
-pause
-```
-
-## 数据格式说明
-
-所有JSON数据文件采用统一格式：
-```json
-{
-  "header": ["field1", "field2", ...],
-  "rows": [
-    [value1, value2, ...],
-    ...
-  ],
-  "rowCount": N
-}
-```
-
-## 输出目录
-
-所有图表保存到 `../../screenshots/` 目录
-
-## 依赖库
-
-- matplotlib
-- numpy
-- pandas (仅screen_grp.py使用)
-
-安装依赖：
-```bash
-pip install matplotlib numpy pandas
-```
-
-## 注意事项
-
-1. 确保数据文件存在于 `../../data/` 目录
-2. 确保安装了中文字体（SimHei、Microsoft YaHei或DengXian）
-3. 图表生成可能需要几秒钟时间，请耐心等待
-4. 如果遇到字体问题，可以在代码中调整字体设置
-
-## 图表样式
-
-- 使用bar+line组合图（左轴柱状图，右轴折线图）
-- 颜色统一：2月=#FF6B6B, 3月=#4ECDC4, 4月=#45B7D1
-- 金额单位：百万或万
-- 百分比保留2位小数
-- 所有图表包含中文标题和标签
+2026-05-02 — 重写为与当前脚本一致；修正 M0/GRP 文件名；补充 `screen_m2_m6`、`screen_case_stock` 与 `run_all_screens` 推荐用法。

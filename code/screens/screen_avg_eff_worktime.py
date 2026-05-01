@@ -8,13 +8,11 @@ Average Effective Working Time Visualization
 import json
 from pathlib import Path
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import numpy as np
-from matplotlib import font_manager
 
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DengXian']
-plt.rcParams['axes.unicode_minus'] = False
+import chart_theme
+
+chart_theme.apply_chart_theme()
 
 def load_data(json_path):
     """加载JSON数据"""
@@ -145,12 +143,10 @@ def plot_avg_eff_worktime(data_path, output_path, chart_title='人均日均有�
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(24, 10),
                                      gridspec_kw={'height_ratios': [2, 1], 'hspace': 0.05})
 
-    # 月份颜色映射
-    month_colors = {
-        '2026-02': '#E8A5C9',  # 浅粉
-        '2026-03': '#9B7EBF',  # 中紫
-        '2026-04': '#5D3A91'   # 深紫
-    }
+    months_in_chart = sorted(
+        {m for gd in plot_data.values() for m in gd.get("months", {})}
+    )
+    month_colors = chart_theme.month_line_color_dict(months_in_chart)
 
     # 准备X轴位置
     x_positions = {}
@@ -171,7 +167,8 @@ def plot_avg_eff_worktime(data_path, output_path, chart_title='人均日均有�
 
         x_coords = [x_positions[f"{group}_{s}"] for s in scopes]
 
-        for month, color in month_colors.items():
+        for month in months_in_chart:
+            color = month_colors.get(month, chart_theme.MONTH_LINE_COLORS[0])
             if month in months_data:
                 y_values = [months_data[month].get(s, None) for s in scopes]
 
@@ -182,8 +179,18 @@ def plot_avg_eff_worktime(data_path, output_path, chart_title='人均日均有�
                     if label:
                         legend_added.add(month)
 
-                    ax1.plot(x_coords, y_values, color=color, linewidth=2.5,
-                            marker='o', markersize=4, label=label, alpha=0.8)
+                    ax1.plot(
+                        x_coords,
+                        y_values,
+                        color=color,
+                        linewidth=2.8,
+                        marker='o',
+                        markersize=5,
+                        markeredgecolor='white',
+                        markeredgewidth=1.0,
+                        label=label,
+                        alpha=0.92,
+                    )
 
     # 添加group背景色和标签
     y_max = max([max([v for v in month_data.values() if v is not None], default=0)
@@ -197,16 +204,17 @@ def plot_avg_eff_worktime(data_path, output_path, chart_title='人均日均有�
             x_end = x_positions[f"{group}_{scopes[-1]}"] + 0.5
 
             # 交替使用浅灰和白色背景
-            bgcolor = '#F5F5F5' if i % 2 == 0 else 'white'
-            ax1.axvspan(x_start, x_end, facecolor=bgcolor, alpha=0.5, zorder=0)
-            ax2.axvspan(x_start, x_end, facecolor=bgcolor, alpha=0.5, zorder=0)
+            bgcolor = '#F8FAFC' if i % 2 == 0 else chart_theme.FIG_FACE
+            ax1.axvspan(x_start, x_end, facecolor=bgcolor, alpha=0.55, zorder=0)
+            ax2.axvspan(x_start, x_end, facecolor=bgcolor, alpha=0.55, zorder=0)
 
             # 添加group标签在顶部
             x_mid = (x_start + x_end) / 2
             ax1.text(x_mid, y_max * 1.05, group,
                     ha='center', va='bottom', fontsize=12, fontweight='bold',
-                    bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgray',
-                             edgecolor='darkgray', alpha=0.8))
+                    color=chart_theme.TEXT_PRIMARY,
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor=chart_theme.LEGEND_FACE,
+                             edgecolor=chart_theme.SPINE_COLOR, alpha=0.95))
 
     # ===== 下半部分：柱状图 =====
     for group in group_keys:
@@ -217,9 +225,12 @@ def plot_avg_eff_worktime(data_path, output_path, chart_title='人均日均有�
         y_values = [diffs.get(s, 0) if diffs.get(s) is not None else 0 for s in scopes]
 
         # 根据正负值设置颜色
-        colors = ['#5FD0C8' if v >= 0 else '#FF6B6B' for v in y_values]
+        colors = [
+            chart_theme.DIFF_POSITIVE if v >= 0 else chart_theme.DIFF_NEGATIVE
+            for v in y_values
+        ]
 
-        bars = ax2.bar(x_coords, y_values, width=0.8, color=colors, alpha=0.8)
+        bars = ax2.bar(x_coords, y_values, width=0.8, color=colors, alpha=0.88)
 
         # 在柱子上方添加数值标签（只标注非零值）
         for x, y, bar in zip(x_coords, y_values, bars):
@@ -244,8 +255,8 @@ def plot_avg_eff_worktime(data_path, output_path, chart_title='人均日均有�
 
             # 如果WK变化，添加分隔线
             if current_wk is not None and wk != current_wk:
-                ax1.axvline(x=x_pos - 0.5, color='gray', linestyle=':', alpha=0.5, linewidth=1)
-                ax2.axvline(x=x_pos - 0.5, color='gray', linestyle=':', alpha=0.5, linewidth=1)
+                ax1.axvline(x=x_pos - 0.5, color=chart_theme.GRID_COLOR, linestyle=':', alpha=0.85, linewidth=1)
+                ax2.axvline(x=x_pos - 0.5, color=chart_theme.GRID_COLOR, linestyle=':', alpha=0.85, linewidth=1)
 
             current_wk = wk
 
@@ -278,9 +289,9 @@ def plot_avg_eff_worktime(data_path, output_path, chart_title='人均日均有�
     ax1.set_ylabel('人均有效工作时长 (分钟)', fontsize=12, fontweight='bold')
     ax2.set_ylabel('环比差值 (分钟)', fontsize=12, fontweight='bold')
 
-    ax1.grid(True, axis='y', alpha=0.3, linestyle='--')
-    ax2.grid(True, axis='y', alpha=0.3, linestyle='--')
-    ax2.axhline(y=0, color='black', linewidth=1, alpha=0.5)
+    ax1.grid(True, axis='y', alpha=0.85, linestyle='--')
+    ax2.grid(True, axis='y', alpha=0.85, linestyle='--')
+    ax2.axhline(y=0, color=chart_theme.TEXT_MUTED, linewidth=1, alpha=0.75)
 
     # ===== 设置图例（上移到 ax1 顶部外侧，横向排列，不挡数据）=====
     ax1.legend(
@@ -288,19 +299,22 @@ def plot_avg_eff_worktime(data_path, output_path, chart_title='人均日均有�
         bbox_to_anchor=(1.0, 1.02),
         fontsize=11,
         framealpha=0.9,
-        ncol=len(month_colors),
+        ncol=max(1, len(months_in_chart)),
         frameon=True,
     )
 
     # ===== 设置标题（按数据源动态命名）=====
+    chart_theme.polish_ax_lines(ax1, stroke_extra=2.5)
+    chart_theme.polish_ax_bar_containers(ax2, stacked=False)
+
     fig.suptitle(f'{chart_title}趋势及环比变化（按模块-队列分组）',
-                 fontsize=16, fontweight='bold', y=0.98)
+                 fontsize=16, fontweight='bold', y=0.98, color=chart_theme.TEXT_PRIMARY)
 
     # ===== 调整布局 =====
     plt.tight_layout()
 
     # ===== 保存图表 =====
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    chart_theme.save_figure(fig, output_path, dpi=150)
     print(f"图表已保存到: {output_path}")
     plt.close()
 

@@ -1,597 +1,327 @@
 ---
 name: wkrpt
-description: 周报自动化 - SQL→JSON→校验→图表；首次须输出前置条件表（含是否满足/理由与处理方法列）并按 Skill 内分项检查体系在本机逐项自检（MCP/网络/依赖/飞书）；可选 Git 同步时须先让用户选择 GitHub / Gitee / 两者
+description: 周报自动化 — SQL→JSON→（可选行数检查）→校验→图表→（可选飞书 Docx：默认尝试 wiki 复制模板以保留标题编号等样式，失败则空白文档克隆；FEISHU_REPORT_USE_CLONE=1 强制克隆）。飞书插图按磁盘原文件字节上传；replace_image 显式传宽高（PNG IHDR / 可选 Pillow），避免开放平台偶发 100px 兜底导致极小图。首次须输出前置条件表并按 A～I 分项自检；可选 Git 同步前须让用户选择 GitHub / Gitee / 两者。不含 HTML 预览方案。
 ---
 
-# 周报自动化完整流程
+# 周报自动化（wkrpt）
 
-自动执行周报数据更新和图表生成的完整工作流，支持智能数据成熟度判断和月同期对比。
+端到端工作流：**数仓 SQL（MCP HTTP）→ `data/*.json` → 数据校验 → `screenshots/*.png` →（可选）飞书文档克隆与插图**。支持 M0 成熟度、月同期与 GRP 同期对齐等业务逻辑。
 
 ## 路径约定（必读）
 
-- **项目根目录**：包含 `code/`、`data/`、`screenshots/`、`.claude/` 的目录（仓库克隆根路径）。
-- 下文凡写 **`code/...`、`data/`、`screenshots/`** 等均相对于项目根，与机器上的盘符、文件夹名无关。
-- 本 Skill 文件路径为 **`.claude/skills/wkrpt.md`**；文档中的跳转链接使用相对于该文件的 **`../../...`** 写法。
+- **项目根目录**：同时包含 `code/`、`data/`、`.claude/`（或 `.cursor/`）的仓库根（与盘符、文件夹名无关）。
+- 下文 **`code/...`、`data/`、`screenshots/`** 均相对项目根。
+- 本 Skill 主路径：**`.claude/skills/wkrpt.md`**；文中「相对 Skill 的链接」使用 **`../../...`**。
+- **Cursor Rules / Agent Skills**：可将同内容置于 **`.cursor/skills/wkrpt/SKILL.md`**（与本文件保持同步），便于在 Rules 中被发现；二者择一维护即可，建议以 **`.claude/skills/wkrpt.md` 为编辑源** 再复制到 `.cursor`。
 
-## 前置使用条件（必读）
+## 前置使用条件
 
-### `run_all.py` 与 Cursor MCP 的约定
+### `run_all.py` 与 Cursor MCP
 
-- `code/python/01_execute_sql/run_all.py` 会读取 **`%USERPROFILE%\.cursor\mcp.json`**（macOS/Linux：`~/.cursor/mcp.json`），且要求存在 **`mcpServers.sql`** 节点。
-- `sql` 配置项内需包含 **`url`**（如 Datalumina MCP HTTP 地址）与 **`headers`**（至少含可用的 **`X-API-Key`**）。密钥无效或未配置时，步骤 1 会在提交查询时报错（如 HTTP 401）。
+- `code/python/01_execute_sql/run_all.py` 读取 **`%USERPROFILE%\.cursor\mcp.json`**（macOS/Linux：`~/.cursor/mcp.json`），且存在 **`mcpServers.sql`**。
+- `sql` 节点需含 **`url`**、**`headers`**（至少 **`X-API-Key`**，值非空）。无效或未配置时步骤 1 会失败（如 HTTP 401）。
+- **禁止**在对话中粘贴完整 API Key 或 `app_secret`。
 
-### 分项检查体系（A～I：Agent 首次执行时逐项照做）
+### 分项检查体系（A～I：首次在本环境跑周报时必须逐项执行）
 
-以下为**每一项**的「怎么查、怎样算通过、失败写什么」。**禁止**在对话中粘贴完整 `X-API-Key` 或 `app_secret`。
+**通用**：路径类检查前 `cd` 到项目根；Python 优先 `python`，无效再试 `python3`。
 
-**通用**：在项目根执行路径类检查时，先 `cd` 到含 `code/sql` 的目录；Python 命令优先 `python`，无效再试 `python3`。
+| 序号 | 检查动作 | ✅ | ❌ | ⚠️ |
+|------|----------|----|----|-----|
+| **A** | 项目根是否存在 `code/sql`、`code/python`、`data`；若无 `screenshots` 则**创建空目录** `screenshots`。 | 均存在 | 缺 `code/sql` 或 `data`：当前目录不是项目根 | — |
+| **B** | `python --version` / `python3 --version` | 主版本 ≥3，建议次版本 ≥10 | 无命令或 &lt;3.8 | 3.8～3.9：可继续但建议升级 |
+| **C** | `python -c "import requests, matplotlib, numpy, pandas; print('ok')"` | 打印 `ok` | `ModuleNotFoundError` | — |
+| **D** | `~/.cursor/mcp.json` 存在；JSON 含 `mcpServers.sql`，内有非空 **`url`**、**`headers`**，且 **`headers` 含键 `X-API-Key`** 且值非空（勿打印值） | 结构满足 | 缺文件/键或值为空 | — |
+| **E** | 在 D 为 ✅ 下：建议项目根执行 `python code/python/01_execute_sql/run_all.py --list`，无 401；若 `--list` 不触发鉴权，可结合「本会话或用户确认近期步骤 1 已成功」标 ✅，否则对「密钥是否真能查数」标 ⚠️；若 `--list` 即 401 → ❌ | 非空 Key +（`--list` 成功或已证实可查数） | 明确 401 | 仅配置就绪、尚未实测查数 |
+| **F** | 对 `mcpServers.sql.url` 的 host 做 `requests.get(..., timeout=10)` 等**连接层**探测（200/401/405 均算可达） | 可达或用户确认代理 | 超时、`ConnectionError`、DNS 失败 | 企业网策略特殊时说明 |
+| **G** | **仅飞书（可选）**：`python -c "from PIL import Image; print('ok')"` | 成功 | 无 Pillow 时步骤 7 仍可：**PNG 用文件头读宽高**；仅非标准/无法解析尺寸时需 Pillow | 不做飞书 → **N/A** |
+| **H** | **仅飞书**：项目根 `feishu_app.json` 存在，且含非空 `app_id`、`app_secret`（勿输出 secret） | 满足 | 复制 `feishu_app.example.json` 填写 | 不做飞书 → **N/A** |
+| **I** | **推荐**：matplotlib 是否发现中文字体（如 Microsoft YaHei / SimHei / DengXian） | 命中至少一种 | 可能乱码 | 无法枚举 → ⚠️，步骤 5 后人工看一张 PNG |
 
-| 序号 | 检查动作（Agent 执行） | 判定为 ✅ | 判定为 ❌ | 判定为 ⚠️（允许的情况） |
-|------|------------------------|-----------|-----------|---------------------------|
-| **A** | 在项目根检查路径是否存在：`code/sql`、`code/python`、`data`；若缺 `screenshots` 则 **创建空目录** `screenshots`（仅新增空文件夹，不删不改其它结构）。可用终端：`Test-Path code/sql; Test-Path data`（PowerShell）或 `test -d code/sql`（bash）。 | 三者均存在；`screenshots` 已存在或已创建 | 找不到 `code/sql` 或 `data`：说明当前工作区不是项目根 | — |
-| **B** | 执行 `python --version` 或 `python3 --version`。 | 主版本 ≥ 3，且次版本建议 ≥ 10（3.10+） | 命令不存在或版本 &lt; 3.8 | 3.8～3.9：标 ⚠️，理由写「建议升级 3.10+」，仍可尝试后续步骤 |
-| **C** | 执行：`python -c "import requests, matplotlib, numpy, pandas; print('ok')"`（与 B 使用同一解释器）。 | 无报错打印 `ok` | `ModuleNotFoundError`：记下缺哪个包 | — |
-| **D** | 确认文件存在：`%USERPROFILE%\.cursor\mcp.json`（Mac/Linux：`$HOME/.cursor/mcp.json`）。若有读取权限，解析 JSON：**存在键路径** `mcpServers` → `sql`，且 `sql` 内含 **`url`**（非空字符串）、**`headers`**（字典）。再确认 **`headers` 中存在键 `X-API-Key`** 且其值为**非空字符串**（不要输出值）。 | 文件存在且结构满足 | 文件不存在 / 不是合法 JSON / 缺少 `mcpServers.sql` / 缺少 `url` 或 `X-API-Key` | — |
-| **E** | （1）在 **D 为 ✅** 前提下，确认 Key **非空**即可。（2）**强烈建议**在项目根执行：`python code/python/01_execute_sql/run_all.py --list`：若进程启动且打印 SQL 列表、**无** `401`/`Unauthorized`（该命令会加载 MCP 配置；若实现上仍会请求鉴权失败则看stderr）。若 `--list` 不触发鉴权：**在本会话或用户确认近期曾成功跑通步骤1** 可标 ✅；否则对「密钥是否真能查数」标 **⚠️**，理由写「配置已就绪，最终以步骤1首次 `submit_query` 为准」。（3）若直接执行 `--list` 即出现 **401**：标 ❌。 | 非空 Key +（`--list` 成功 **或** 已证实近期可查数） | `--list` 或等价探测明确返回 401 / 鉴权失败 | 仅完成非空与 D，尚未实际查数 |
-| **F** | 从 `mcp.json` 读出 `mcpServers.sql.url` 的 **主机**（勿整段敏感路径贴给用户时可适当省略路径参数）。用 `python -c` 发 **HTTPS 连接探测**：例如 `requests.get(url, timeout=10)` 仅看是否 **连接层成功**（不要求业务成功），或 `ping`/系统工具测 DNS。若企业网需代理：询问用户是否已设系统/环境代理。 | `requests` 能连上 host（如 200/401/405 均说明网络可达）；或用户确认代理已配置且同类工具可用 | 超时、`ConnectionError`、`Name or service not known` | 防火墙限制仅允许 Cursor 内置 MCP：说明「须本机对当前终端开放同一出口」 |
-| **G** | **仅当用户本次要做飞书写文档时检查**：`python -c "import requests_toolbelt; print('ok')"`。若用户明确不做飞书，本行填 **—（跳过）**，「是否满足」可写 **N/A**。 | 导入成功 | 失败则建议：`pip install requests-toolbelt` | 用户未决定是否飞书：标 ⚠️「待用户确认是否跑飞书」 |
-| **H** | **仅飞书流程**：项目根 `feishu_app.json` 存在；解析 JSON 含非空 `app_id`、`app_secret`（**勿输出 secret**）。不做飞书则 **N/A**。 | 文件存在且两字段非空 | 缺失文件或字段为空：说明复制 `feishu_app.example.json` 并填写 | — |
-| **I** | **推荐**：`python -c "from matplotlib import font_manager; names={f.name for f in font_manager.fontManager.ttflist}; need=('Microsoft YaHei','SimHei','DengXian'); hit=[n for n in need if any(n.lower() in x.lower() for x in names)]; print(hit or 'none')"`。若输出含任一字体名则 ✅。Windows 也可检查字体文件是否存在（可选）。 | 至少命中一种常见中文字体 | 输出 `none`：图表可能乱码 | 无法枚举字体时标 ⚠️，理由写「请在步骤5后肉眼看一张 PNG」 |
-
-### 前置条件检查表（首次执行时必须输出；须含自检结果）
-
-**Agent 流程**：先根据上表 **逐项在本机执行检查**，再向下表中填入 **是否满足** 与 **理由与处理方法**。
-
-- **是否满足** 取值：**✅** / **❌** / **⚠️** / **N/A**（不适用，如不做飞书时的 G/H）。
-- **理由与处理方法**：
-  - 为 **✅** 或 **N/A** 时：可写 **「—」** 或一句确认（勿泄露密钥）。
-  - 为 **❌** 或 **⚠️**：必须写清**依据哪一步检查**、**失败现象**、**建议用户操作**（命令、配置路径、安装包名等）。
-
-**输出模板（复制后填空）：**
+### 前置条件检查表（首次必须输出并填空）
 
 | 序号 | 条件 | 是否必需 | 用于哪些步骤 | 不满足时典型现象 | 是否满足 | 理由与处理方法 |
-|------|------|----------|--------------|------------------|----------|----------------|
-| A | 工作区为项目根（含 `code/`、`data/`、`screenshots`） | 必需 | 全部 | 找不到 SQL 或 data |  |  |
+|------|------|----------|----------------|------------------|----------|----------------|
+| A | 工作区为项目根 | 必需 | 全部 | 找不到 SQL 或 data |  |  |
 | B | Python 3（建议 3.10+） | 必需 | 全部 | 无 python |  |  |
-| C | `requests`、`matplotlib`、`numpy`、`pandas` | 必需 | 1～5 | `ModuleNotFoundError` |  |  |
-| D | `~/.cursor/mcp.json` 含 `mcpServers.sql` + `url` + `X-API-Key` | 必需 | 步骤 1 | 启动即报错 |  |  |
-| E | API Key 有效、可查数（见分项表） | 必需 | 步骤 1 | HTTP 401 |  |  |
-| F | 本机网络可达 MCP `url` | 必需 | 步骤 1 | 超时 |  |  |
-| G | `requests_toolbelt` | 仅飞书 | 飞书传图 | 上传失败 |  |  |
+| C | requests / matplotlib / numpy / pandas | 必需 | 1～5 | `ModuleNotFoundError` |  |  |
+| D | `~/.cursor/mcp.json` → `mcpServers.sql` + url + `X-API-Key` | 必需 | 步骤 1 | 启动即失败 |  |  |
+| E | Key 有效可查数 | 必需 | 步骤 1 | HTTP 401 |  |  |
+| F | 网络可达 MCP | 必需 | 步骤 1 | 超时 |  |  |
+| G | `Pillow`（可选，非 PNG 或无法从头解析尺寸时的兜底） | 仅飞书·可选 | 步骤 7 | 标准 PNG 可不装 |  |  |
 | H | `feishu_app.json` | 仅飞书 | 飞书脚本 | 无凭证 |  |  |
-| I | 中文字体（ matplotlib 可发现） | 推荐 | 步骤 5 | 乱码 |  |  |
+| I | 中文字体 | 推荐 | 步骤 5 | 乱码 |  |  |
 
-### 首次执行（新设备 / 新用户 / 本会话第一次跑 wkrpt）——Agent 必须做的事
+**阻塞规则**
 
-**触发**：用户第一次在本环境跑周报流程、或明确表示「新电脑 / 刚 clone / 没跑通过」，或你无法确认环境已就绪时——**一律先做自检**。
+- **A～D、B、C** 任一 **❌**：不执行步骤 1～5，只给修复指引。
+- **E** 为 **❌**：同上。
+- **E** 为 **⚠️**、其余必需为 **✅**：可跑步骤 1；若首次 `submit_query` 仍失败，停止并让用户轮换 Key/权限。
+- **F** 为 **❌**：不跑步骤 1。
+- **H**：要做飞书时不得为 **❌**；**G**（Pillow）可选，标准 PNG 插图不依赖 Pillow；不做飞书标 **N/A**。
 
-1. **输出**上方 **「前置条件检查表（模板）」** 的完整表格骨架。
-2. **按「分项检查体系」表格**，在本机逐项执行检查，将结果填入 **是否满足**、**理由与处理方法** 两列。
-3. **阻塞规则**：
-   - **A～D、B、C** 任一为 **❌**：**禁止**执行步骤 1～5，只输出修复指引。
-   - **E** 为 **❌**（明确 401 等）：同上。
-   - **E** 为 **⚠️**、其余必需项均为 **✅**：可执行步骤 1，但若步骤 1 首次提交仍失败，停止并让用户轮换 Key/权限。
-   - **F** 为 **❌**：禁止步骤 1，先解决网络/DNS/代理。
-   - **G/H**：仅当用户要做飞书时不得为 **❌**；否则标 **N/A** 跳过。
-4. **必需项（A～F，且 G/H 在飞书场景下）均为 ✅ 或可接受的 ⚠️（仅 E 允许待步骤1验证）** 后，再进入核心流程。
+### 与用户说明的简短话术
 
-### 与用户说明的简短话术示例
-
-> 首次在本机跑 wkrpt：下面是前置条件检查表（含是否满足与处理方法）。若有 ❌，请先按「理由与处理方法」修复；⚠️ 表示有风险或待后续步骤确认。
+> 首次在本机跑 wkrpt：下面是前置条件检查表。若有 ❌ 请先按「理由与处理方法」修复；⚠️ 表示有风险或待后续步骤确认。
 
 ---
 
-## 快速使用
+## 一键速查（均在项目根执行）
 
-```bash
-/wkrpt
+```powershell
+# 1) SQL → JSON（并发轮询 MCP，引擎 SMART，dataSourceId=1）
+python code/python/01_execute_sql/run_all.py
+
+# 2.5 可选：rowCount 与 rows 长度一致性
+python code/python/025_check_rowcount/check_rows.py
+
+# 3) 业务校验（主实现；screens 下为兼容入口）
+python code/python/03_validate_data/validate_data.py
+
+# 5) 全部图表（自动发现 code/screens/screen_*.py）
+python code/screens/run_all_screens.py
+
+# 5.5 推荐（飞书前）：拉取 wiki 模板结构，比对占位符与 screenshots/*.png，输出 template_analysis.json
+python code/python/055_analyze_template/analyze_template.py
+
+# 7) 可选：飞书周报（需 H/G；会打开浏览器到新文档）
+python code/python/06_generate_feishu/generate_feishu_report.py
 ```
 
-## 凭证与交接（必读）
+---
 
-周报主流程（SQL → 校验 → 图表）**不依赖**飞书；若后续要跑「模板分析」「飞书文档生成」等脚本，需要飞书应用凭证。
+## 凭证与交接（飞书）
 
-**推荐做法（接收方零环境变量）：**
+主流程（SQL→图表）**不依赖**飞书。
 
-1. 在本项目**根目录**复制 `feishu_app.example.json` 为 `feishu_app.json`，填入 `app_id`、`app_secret`（与飞书开放平台该自建应用一致）。
-2. `feishu_app.json` 已被 `.gitignore` 忽略，**不会**随 Git 推送；**交接时请用安全方式**（加密渠道、U 盘、内网盘等）将 `feishu_app.json` 一并交给接收方，对方放到自己 clone 下来的**同一项目根目录**即可，**无需**再设系统环境变量或 PowerShell 里的 `$env:...`。
-3. 可选：若更习惯环境变量，仍可设置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`（会覆盖文件未填的情况；实际以代码加载顺序为准：先读 `feishu_app.json`，再读环境变量）。
+1. 根目录复制 `feishu_app.example.json` → `feishu_app.json`，填写 `app_id`、`app_secret`（与开放平台应用一致）。
+2. `feishu_app.json` 已被 `.gitignore` 忽略；交接用安全渠道单独传递。
+3. 可选环境变量 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`（与文件并存时的优先级以 `feishu_creds.py` 为准）。
+4. `get_token.ps1.example` 可复制为本地 `get_token.ps1`（勿提交含密钥脚本）。
 
-根目录 `get_token.ps1.example` 演示了如何基于 `feishu_app.json` 拉取 token；你可复制为本地 `get_token.ps1` 使用（`get_token.ps1` 勿提交 Git）。
+---
 
-## 核心流程
+## 核心流程（步骤编号与仓库脚本一致）
 
-### 步骤1：执行SQL查询
-- 读取 `code/sql/` 目录下全部 `.sql`（当前仓库一般为 **10** 个，含人均工时等；以 `python code/python/01_execute_sql/run_all.py --list` 为准）
-- 使用 MCP HTTP（`run_all.py` 读取 `~/.cursor/mcp.json` 中的 **`mcpServers.sql`**）调用 **`submit_query` / `get_query_status` / `get_query_result`**，引擎 **SMART**
-- 自动等待所有查询完成
-- SQL使用动态日期函数，无需手动更新日期
+### 步骤 1：执行 SQL 并落盘 JSON
 
-### 步骤2：保存JSON数据
-将查询结果保存为标准JSON格式到 `data/` 目录：
+- 脚本：`code/python/01_execute_sql/run_all.py`
+- 行为：读取 `code/sql/` 下**全部** `*.sql`，经 MCP **`tools/call`** 调用 **`submit_query` → `get_query_status` → `get_query_result`**，写入 `data/<basename>.json`（文件名形如 `NN_xxx.sql` 时去掉数字前缀 → `xxx.json`，与脚本内规则一致）。
+- 常用：`--list` 列 SQL；`python run_all.py 01_s_class_all` 单跑一条。
+- SQL 使用 Hive 侧动态日期，一般**无需手改日期**。
 
-```json
-{
-  "metadata": {
-    "data_fetch_date": "2026-04-20",
-    "query_time": "2026-04-20 08:30:00",
-    "query_id": "953982"
-  },
-  "header": ["field1", "field2", ...],
-  "rows": [[value1, value2, ...], ...],
-  "rowCount": 234
-}
-```
+### 步骤 2：JSON 形态
 
-**重要**：`metadata.data_fetch_date` 用于M0数据的成熟度判断和月同期对比。
+标准结构含 **`metadata`**（至少建议含 `data_fetch_date`，供 M0 成熟度）、`header`、`rows`、`rowCount`。`run_all.py` 会写入 `query_time`、`query_id`、`data_source` 等（以实际输出为准）。
 
-### 步骤3：数据验证
-运行 `validate_data.py` 验证数据质量：
-- ✓ 时间范围检查（S类3个月、M1≥3个月、M0全年、GRP 2个月、人均有效工作时长3个月）
-- ✓ 回款率约束（≤100%，MTD除外）
-- ✓ 字段完整性（必填字段、数据类型）
+### 步骤 2.5（可选）：行数一致性
 
-### 步骤4：确认继续
-- 如果验证失败，暂停并报告问题详情
-- 等待用户确认后再继续后续步骤
+- `code/python/025_check_rowcount/check_rows.py`：检查各 JSON 的 `rowCount` 与 `len(rows)` 是否一致。
 
-### 步骤5：生成图表
-- 清除旧图表（按类型分组清理）
-- 依次运行5个图表生成脚本
-- 输出39张PNG图表到 `screenshots/` 目录
+### 步骤 3：数据验证
 
-### 步骤6（可选）：同步到 Git 远端
-- 仅当用户**明确要求**把本仓库推送到 GitHub 和/或 Gitee 时执行；**须先请用户选择**推送到哪一侧或两侧。
-- 具体命令、远程名与注意事项见下文 **「Git 同步到远端（GitHub / Gitee）」**。
+- **主脚本**：`code/python/03_validate_data/validate_data.py`  
+  - 先校验「SQL 集合与 `data/*.json` 集合」是否对齐（缺 JSON 会 hard fail）。  
+  - 按注册表对 S/M0/M1/GRP/人均工时等做时间窗、回款率等规则校验（细节见脚本内注释与 `VALIDATORS`）。
+- **兼容入口**：`code/screens/validate_data.py`（内部转调上述主脚本）。
+
+### 步骤 4：确认继续
+
+验证失败时**暂停**，输出明细，待用户确认是否继续（不建议跳过校验直接画图）。
+
+### 步骤 5：生成图表
+
+- **编排脚本**：`code/screens/run_all_screens.py`  
+  - 自动发现 `code/screens/screen_*.py`，子进程独立运行，超时 300s/脚本。  
+  - `python code/screens/run_all_screens.py --list` 列出脚本；可传过滤参数只跑其一（见脚本 `--help`）。
+- **输出目录**：项目根 `screenshots/`（各 `screen_*.py` 内定义文件名）。
+- **图表数量**：以 `run_all_screens.py` 当次汇总为准（人均模块最多 **3** 张 PNG，取决于 `data/` 中是否存在对应 JSON）。含 **M2 / M2–M6**（`screen_m2_m6.py`，4 张）、**`screen_case_stock.py`（1 张九宫格）** 等后常见合计约 **50** 张量级（以 `screenshots/` 目录计数为准）。
+
+### 步骤 6（可选）：Git 推远端
+
+见文末 **「Git 同步」**。推送前须让用户选择 **仅 GitHub / 仅 Gitee / 两者**。
+
+### 步骤 5.5（推荐）：飞书模板预检（生成文档前）
+
+- **脚本**：`code/python/055_analyze_template/analyze_template.py`
+- **依赖**：与步骤 7 相同（`feishu_app.json`、`requests`）；需可访问飞书开放平台。
+- **行为**：读取 wiki 模板（URL 与 `generate_feishu_report.py` / 脚本内 `WIKI_URL` 一致），汇总块结构、`{参数}`、`[*.png]` 占位符，并核对 **`screenshots/` 是否缺文件**。
+- **产出**：项目根 **`template_analysis.json`**（便于 diff / 排查模板变更）。**注意**：该脚本**不**覆盖仓库中的 `template_blocks.json`（若存在，多为历史导出备份；以 `template_analysis.json` 为本次分析结果为准）。
+
+### 步骤 7（可选）：飞书 Docx 周报
+
+- **脚本**：`code/python/06_generate_feishu/generate_feishu_report.py`
+- **依赖**：步骤 1～5 已完成；**建议先跑步骤 5.5**，确认占位图齐全；`feishu_app.json`；**`requests`（插图上传使用内置 multipart：`files` + `data`，无需 `requests_toolbelt`）**；可选 **`Pillow`**（仅在无法从 PNG 文件头解析宽高时起兜底作用）。
+- **生成策略（默认优先「整篇复制模板」）**  
+  脚本会**先尝试保留模板文档级样式**（含客户端侧的 **标题多级编号**、有序列表样式等），失败后再回退到「空白文档 + 逐块克隆」。
+  1. **知识库模板（URL 含 `/wiki/`）**  
+     - 调用 **`wiki/v2/spaces/{space_id}/nodes/{node_token}/copy`** 复制节点；请求体带 **`target_space_id`**，若有 **`parent_node_token`** 则一并传入，复制到与模板相同的知识空间目录。  
+     - **权限**：应用需对该知识空间具备**可编辑级**能力；否则常见 **`131006 wiki space permission denied`**。须在知识库中将应用加入为成员，并在开放平台开通 **`wiki:node:copy` / `wiki:wiki`** 等（详见 [知识库常见问题](https://open.feishu.cn/document/ukTMukTMukTM/uUDN04SN0QjL1QDN/wiki-v2/wiki-qa)）。  
+     - 复制成功后：按原逻辑删除「插入参数」说明段、将 **`[*.png]`** 文本块替换为图片块并上传、`PATCH` 替换各块中的 **`{参数}`**。  
+  2. **云盘兜底**  
+     - 若配置了 **`FEISHU_DST_FOLDER_TOKEN`**，且能从 **`drive/v1/files/{模板token}`** 读到 **`parent_token`**，则尝试 **`drive` 复制接口**（explorer v2 / v1）再在副本上编辑。  
+  3. **回退：`FEISHU_REPORT_USE_CLONE=1` 或上述复制均失败**  
+     - **`create_document` 空白文档 + `add_children` 按模板结构重建**。此时 **API 不会继承文档级「标题编号」样式**；脚本**不会**再往标题正文里拼接数字序号（避免与飞书自带编号冲突）。  
+     - 克隆路径已实现：**`heading4`～`heading9`（block_type 6～11）** 与 **`ordered.style.sequence`**（缺省时补 `"auto"`）、文本类块 **`deepcopy`** 载荷等，尽量减少列表序号等字段丢失。
+- **行为概要（与策略无关的共性）**  
+  - 正文中 **`{占位符}`** 与 **`[xxx.png]`** 分别替换为计算参数与 `screenshots/` 上图（上传后 `replace_image`）。  
+  - **插图字节与尺寸**：上传 **`screenshots/` 内文件的原始字节**，不做缩放、不重新编码。`replace_image` **必须**携带 **`width`、`height`（像素）** 与素材一致（优先读 PNG **IHDR**，否则尝试 Pillow）；否则开放平台在「检测失败」时可能将块兜底为 **100×100px**，表现为**偶发整图极小**。对齐方式当前固定 **`align: 2`（居中）**。  
+  - 默认新文档标题：`催收周报（yyyy-MM-dd）`（见 `generate_report` 内 `output_title` 默认逻辑）。  
+  - 运行开始会打印 **`[doc-guide]`** 与飞书 block/Markdown 差异相关的**自检说明**（与 Cursor 内 **feishu-cli-doc-guide** Skill 对齐思路）；模板中请勿依赖本脚本不支持的 Markdown 围栏（如 mermaid）作为唯一呈现手段。
+- **Wiki 地址**：当前 `main()` 内写死 wiki token；若更换知识空间模板，需改脚本中 URL 或改为由你封装参数化入口。
+- **说明**：飞书 **Docx 不支持嵌入自定义 HTML 整页**；周报以 **飞书原生块 + 上传 PNG** 为准，**无**仓库内 HTML 镜像生成步骤。**标题编号**：要与模板完全一致，依赖 **复制模板** 成功；仅克隆模式下勿指望客户端多级标题编号自动出现。
+
+---
 
 ## 数据映射
 
-### SQL → JSON
-
-| SQL文件 | 输出JSON | 行数 | 说明 | Query ID |
-|---------|---------|------|------|----------|
-| 01_s_class_all.sql | s_class_all.json | ~234 | S类案件-ALL口径 | 953982 |
-| 02_s_class_new.sql | s_class_new.json | ~234 | S类案件-NEW口径 | 953983 |
-| 03_s_class_mtd.sql | s_class_mtd.json | ~234 | S类案件-MTD口径 | 953984 |
-| 04_m1_assignment_repayment.sql | m1_assignment_repayment.json | 156+ | M1分案回款数据 | 953985 |
-| 05_m0_billing.sql | m0_billing.json | ~360+ | M0账单明细 | 953986 |
-| 06_m0_billing_grouped.sql | m0_billing_grouped.json | ~720+ | M0分组统计 | 953987 |
-| 07_grp_collector.sql | grp_collector.json | ~1000+ | GRP催收员业绩 | 953988 |
-| 08_avg_eff_worktim.sql | avg_eff_worktim.json | 643 | 人均有效工作时长（按模块-队列） | 963926 |
-
-### JSON → 图表
-
-| 生成脚本 | 数据源 | 输出图表 | 数量 | 说明 |
-|---------|--------|---------|------|------|
-| screen_s_class.py | s_class_*.json | recovery_rate_*.png | 15张 | 3种口径×5个case_type |
-| screen_m1.py | m1_assignment_repayment.json | m1_*.png | 3张 | 分案/回款/回款率 |
-| screen_m0.py | m0_billing*.json | m0_*.png | 8张 | 逾期率/催回率/用户分析 |
-| screen_grp.py | grp_collector.json | grp_*.png | 12张 | 催收员业绩对比 |
-| screen_avg_eff_worktime.py | avg_eff_*.json（多条） | avg_eff_*.png | 至多 3 张 | 人均有效/Call/WA 工时（以数据文件是否存在为准） |
-
-**图表总数**：以 `code/screens/run_all_screens.py` 实际产出为准（文档示例曾写 39 张；含多条 avg_eff 时可能 **40+**）。
-
-## 关键业务逻辑
-
-### M0数据成熟度判断 ⭐ 核心逻辑
-
-**成熟度定义**：一个billing_date的账单，需要等待N天后，才能观察到其N天后的业务指标。
-
-#### 数据获取时间识别
-
-1. **优先从metadata读取**：
-   ```json
-   "metadata": {
-     "data_fetch_date": "2026-04-20"
-   }
-   ```
-
-2. **兼容旧数据（自动推断）**：
-   - 找到最后一个 `principal_pastdue_1d > 0` 的billing_date
-   - 数据获取时间 = 最后有效日期 + 1天
-   - 例如：最后有效日期=04-19 → 数据获取时间=04-20
-
-#### 成熟期要求
-
-| 指标 | 成熟期 | 计算公式 | 示例（数据获取04-20） |
-|------|--------|---------|---------------------|
-| 逾期1d | 1天 | billing_date ≤ fetch_date - 1 | billing_date ≤ 04-19 |
-| 7d催回率 | 8天 | billing_date ≤ fetch_date - 8 | billing_date ≤ 04-12 |
-| 30d催回率 | 31天 | billing_date ≤ fetch_date - 31 | billing_date ≤ 03-20 |
-
-#### 月同期对比 ⭐ 重要
-
-**所有标题包含"月同期"的图表**，各月统计周期必须一致：
-
-```
-数据获取时间：2026-04-20
-月内截止日期：19号
-
-4月统计：4月1-19日（19天）
-3月统计：3月1-19日（19天）← 同期！
-2月统计：2月1-19日（19天）← 同期！
-```
-
-**涉及的图表（5张）**：
-1. M0金额逾期率（按月同期）
-2. M0单量逾期率（按月同期）
-3. M0金额催回率（7d/30d，按月同期）
-4. M0金额催回率（7d/30d，非合并订单用户，按月同期）
-5. M0金额催回率（7d/30d，合并订单用户，按月同期）
-
-**关键点**：
-- ✓ 分子分母同步过滤
-- ✓ 所有月份用相同天数对比
-- ✓ 避免最新月数据不完整导致指标被稀释
-
-### GRP同期对比
-
-历史月份截至与最新月份相同日期：
-- 最新月202604数据到19号 → 历史月202603也取到19号
-- 在 `process_grp_data()` 中自动实现
-- 避免月末效应影响对比
-
-### GRP催收员动态适配
-
-支持各月催收员数量变化：
-- **显示逻辑**：两个月的并集（3月有PM就显示，4月没有就不显示）
-- **排序逻辑**：仅统计最新月份存在的催收员
-- **缺失数据**：自动填充为0
-
-## 图表特性
-
-### S类图表 (15张)
-- 3种口径（ALL/NEW/MTD）× 5个case_type
-- 柱状图 + 折线图组合
-- 自动月份对比
-- MTD口径回款率允许>100%
-
-### M1图表 (3张)
-- 分案金额、回款金额、回款率
-- 多月趋势对比
-- 自动计算同比环比
-
-### M0图表 (8张) ⭐ 成熟度逻辑
-- **逾期率图表**（3张）：使用1天成熟期，启用月同期对比
-- **催回率图表**（3张）：使用8天/31天成熟期，启用月同期对比
-- **用户分析图表**（2张）：合并订单用户vs非合并订单用户
-- 按周统计（周日起始）
-- 智能过滤未成熟数据
-
-### GRP图表 (12张) ⭐ 已美化
-- 催收员/区域业绩对比（12个case_type）
-- 现代化配色方案（14种颜色）
-- 增强视觉效果：粗线条(3.0)、大标记点(5)、阴影效果
-- 智能布局：自动适配催收员数量变化（1-20+人）
-- 排序展示：底部显示回款率排名（带百分比）
-- 动态标签间隔：防止文字重叠
-
-### 人均有效工作时长图表 (1张)
-- **数据分组**：按模块-队列组合分组（S1-RA、S1-RB、S1-RC、S1-RD、S2-RA、S2-RB、S2-RC、S3、S3-RB）
-- **数据过滤**：仅保留S1、S2、S3模块，过滤M2和NULL
-- **双层布局**：
-  - 上半部分：折线图显示3个月的人均有效工作时长趋势
-  - 下半部分：柱状图显示最新月份的环比差值
-- **视觉优化**：
-  - 空值处理：折线在空值处自动断开，不强行连接
-  - 背景色：各分组间交替使用浅灰/白色背景
-  - X轴标签：保留WK-WD原始格式（如WK1-WD2），按周添加分隔线
-  - 无留白：图表左右边界紧贴数据区域
-- **字段说明**：
-  - area_type：模块（S1/S2/S3）
-  - area_ranking_type：队列（如S1RA、S2RC等）
-  - scope_x：横坐标分类（WK{n}-WD{d}，WK表示月内第几周，WD表示周几）
-  - avg_eff_worktime：人均有效工作时长（分钟）
-  - diff_avg_eff_worktime：环比差值（分钟，青色表示增长，红色表示下降）
-
-## 关键注意事项
-
-### ⚠️ SQL文件管理
-
-**不要随意修改SQL文件！** 所有SQL已使用动态日期函数：
-
-```sql
--- 自动获取昨天的日期
-date_format(date_sub(current_date(), 1), 'yyyy-MM-dd')
-
--- 自动获取最近2个月
-WHERE mth IN (
-  date_format(date_sub(current_date(), 30), 'yyyyMM'),
-  date_format(date_sub(current_date(), 1), 'yyyyMM')
-)
-```
-
-无需手动更新日期，每次运行自动获取最新数据。
-
-### 数据流完整性
-
-必须按顺序执行，不可跳过中间步骤：
-
-```
-SQL查询 → JSON保存(+metadata) → 数据验证 → 图表生成
-```
-
-- 跳过验证可能导致图表数据错误
-- JSON必须包含metadata字段（用于M0成熟度判断）
-- 所有字段类型必须正确
-
-### 环境要求
-
-- **MCP SQL Server**：已配置并有数据库访问权限
-- **Python 3.x**：matplotlib, numpy, pandas 库
-- **中文字体**：SimHei / Microsoft YaHei / DengXian
-- **查询时间**：单个查询约30-120秒，总计1-2分钟
-
-## JSON格式规范
-
-### 标准格式（必须包含metadata）
-
-```json
-{
-  "metadata": {
-    "data_fetch_date": "2026-04-20",
-    "query_time": "2026-04-20 08:30:00",
-    "query_id": "953982",
-    "data_source": "tmp_export.s_class_all"
-  },
-  "header": ["p_month", "day", "case_type", "assigned_principal", ...],
-  "rows": [
-    ["2026-02", "2026-02-01", "S1", "17142803496.000000", ...],
-    ["2026-02", "2026-02-02", "S1", "6149470974.000000", ...]
-  ],
-  "rowCount": 234
-}
-```
-
-### metadata字段说明
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| data_fetch_date | string | **是** | 数据获取日期（YYYY-MM-DD），用于M0成熟度判断 |
-| query_time | string | 否 | 查询执行时间（YYYY-MM-DD HH:MM:SS） |
-| query_id | string | 否 | Query ID，用于追踪 |
-| data_source | string | 否 | 数据表名 |
-
-**重要**：
-- M0数据（m0_data.json、m0_data_grouped.json）**必须**包含 `data_fetch_date`
-- 如果没有metadata，代码会自动推断（兼容旧数据），但不够准确
-- 其他数据源的JSON可选metadata，但建议统一添加
-
-## 故障排查
-
-| 问题 | 原因 | 解决方案 |
-|------|------|---------|
-| SQL查询超时 | 数据量大/网络慢 | 检查网络连接，必要时增加超时参数 |
-| JSON格式错误 | 查询结果列不一致 | 检查SQL的SELECT字段顺序和类型 |
-| 缺少metadata | 旧格式JSON | 重新执行SQL查询，添加metadata字段 |
-| 数据验证失败 | 时间范围/回款率异常 | 检查SQL的WHERE条件和日期函数 |
-| 图表生成报错 | JSON字段不匹配 | 重新执行SQL查询，确保字段完整 |
-| M0逾期率异常 | 成熟度判断错误 | 检查metadata.data_fetch_date是否正确 |
-| 月同期对比不一致 | 各月天数不同 | 正常现象，代码已启用same_period=True |
-| 催收员显示异常 | 各月collector数量不同 | 正常现象，代码已支持动态适配 |
-| 中文显示乱码 | 字体未安装 | 安装 SimHei/Microsoft YaHei 字体 |
-
-## 执行输出示例
-
-```
-============================================================
-周报自动化流程开始
-============================================================
-
-[第1步] 执行SQL查询
-  查询 01_s_class_all.sql (Query ID: 953982)...
-  ✓ 查询完成: 234 行
-  查询 02_s_class_new.sql (Query ID: 953983)...
-  ✓ 查询完成: 234 行
-  ... (共8个查询)
-
-[第2步] 保存JSON文件
-  ✓ s_class_all.json (28.0 KB)
-    - metadata.data_fetch_date: 2026-04-20
-  ✓ s_class_new.json (27.9 KB)
-  ✓ s_class_mtd.json (28.1 KB)
-  ✓ m1_assignment_repayment.json (19.5 KB)
-  ✓ m0_data.json (45.2 KB)
-    - metadata.data_fetch_date: 2026-04-20 ← 用于成熟度判断
-  ✓ m0_data_grouped.json (88.7 KB)
-    - metadata.data_fetch_date: 2026-04-20
-  ✓ grp_data.json (127.3 KB)
-  ✓ avg_eff_worktim.json (78.5 KB)
-    - 643行数据，按模块-队列分组
-
-[第3步] 数据验证
-  验证 S类案件数据...
-    ✓ 时间范围: 3个月
-    ✓ 回款率约束: 全部 ≤ 100%
-  验证 M1分案回款数据...
-    ✓ 时间范围: ≥ 3个月
-  验证 M0账单数据...
-    ✓ 数据连续性: 从2025-01-01开始
-    ✓ 数据获取时间: 2026-04-20
-  验证 GRP催收员数据...
-    ✓ 时间范围: 2个月
-  验证 人均有效工作时长数据...
-    ✓ 时间范围: 3个月
-    ✓ 数据行数: 643行
-
-  [验证通过] 所有数据符合要求
-
-[第5步] 生成图表
-  生成S类图表...
-    [清除旧图表] 15 张
-    ✓ recovery_rate_S1RA_ALL.png
-    ... (共15张)
-
-  生成M1图表...
-    [清除旧图表] 3 张
-    ✓ m1_assignment.png
-    ... (共3张)
-
-  生成M0图表...
-    [清除旧图表] 8 张
-    数据获取时间（从metadata读取）: 2026-04-20
-    月内截止日期: 每月19号（用于月同期对比）
-    ✓ m0_principal_overdue_rate_monthly.png
-    ✓ m0_count_overdue_rate_monthly.png
-    ✓ m0_principal_overdue_rate_weekly.png
-    ✓ m0_collection_rate_weekly.png
-    ✓ m0_collection_rate_7d_30d_monthly.png
-    ✓ m0_ind1_ratio.png
-    ✓ m0_collection_rate_7d_30d_monthly_ind0.png
-    ✓ m0_collection_rate_7d_30d_monthly_ind1.png
-
-  生成GRP图表...
-    [清除旧图表] 12 张
-    ✓ grp_S1RA.png
-    ... (共12张)
-
-  生成人均有效工作时长图表...
-    [清除旧图表] 1 张
-    ✓ avg_eff_worktime.png
-
-============================================================
-周报自动化流程完成！共生成 39 张图表
-输出目录: <项目根>/screenshots
-============================================================
-```
-
-## 技术配置
-
-### SQL查询
-- 引擎：SMART
-- 数据源：datasource=1
-- 超时：120秒/查询
-- 动态日期：使用 `date_format(date_sub(current_date(), N), 'yyyy-MM-dd')`
-
-### 图表样式
-- DPI：100-150
-- 格式：PNG
-- 字体：DengXian / SimHei / Microsoft YaHei
-- 背景：白色
-- 图例：带阴影、圆角边框
-- 标题：24号字体，加粗，黑色（fig.suptitle）
-
-## 相关文档
-
-- [SQL查询说明](../../code/sql/README.md)
-- [图表生成文档](../../code/screens/README.md)
-- [GRP鲁棒性文档](../../code/screens/GRP_ROBUSTNESS.md)
-- [数据验证脚本](../../code/screens/validate_data.py)
-
-## 手动执行
-
-如需单独执行某个步骤：
-
-```bash
-# 在项目根目录下进入图表脚本目录（路径相对于项目根）
-cd code/screens
-
-# 数据验证
-python validate_data.py
-
-# 生成S类图表
-python screen_s_class.py
-
-# 生成M1图表
-python screen_m1.py
-
-# 生成M0图表（会自动读取metadata.data_fetch_date）
-python screen_m0.py
-
-# 生成GRP图表
-python screen_grp.py
-
-# 生成人均有效工作时长图表
-python screen_avg_eff_worktime.py
-```
-
-## Git 同步到远端（GitHub / Gitee）
-
-在周报流程或仓库改动结束后，如需把**代码与文档**推到远端，按本节执行。**不要**把 `data/**/*.json`、`screenshots/**`（运行生成的 PNG）、飞书密钥等提交上去（项目根 `.gitignore` 已排除；勿使用 `git add -f` 强行纳入）。
-
-### Agent 必须先确认目的地
-
-**在执行任何 `git push` 之前**，须向用户明确提问并让其一选：
-
-1. **仅 GitHub**（默认远程名一般为 `origin`）
-2. **仅 Gitee**（远程名一般为 `gitee`）
-3. **两个都要**（依次 push）
-
-用户选定后再执行对应推送；不得默认替用户选远端。
-
-### 远程地址约定（与当前仓库一致时可照抄）
-
-| 用途 | 远程名 | 示例 URL |
-|------|--------|----------|
-| GitHub | `origin` | `https://github.com/zhangka3/fp.git` |
-| Gitee | `gitee` | `https://gitee.com/zhangka3/fp.git` |
-
-若本地尚未添加远程：
-
-```bash
-# GitHub（按需）
-git remote add origin https://github.com/zhangka3/fp.git
-
-# Gitee（按需）
-git remote add gitee https://gitee.com/zhangka3/fp.git
-```
-
-查看已有远程：`git remote -v`。
-
-### 标准推送流程（在项目根执行）
-
-```bash
-git status
-git add -A    # 确认状态里没有不应提交的密钥或 data 下 JSON
-git commit -m "描述本次改动（一句话）"
-```
-
-按用户选择执行其一或依次执行：
-
-```bash
-# 用户选「仅 GitHub」
-git push -u origin main
-
-# 用户选「仅 Gitee」
-git push -u gitee main
-
-# 用户选「两个都要」
-git push origin main
-git push gitee main
-```
-
-分支名以本地实际为准（常见为 `main`）；若跟踪分支已设好，可简写为 `git push origin`、`git push gitee`。
-
-### 认证与网络提示
-
-- **HTTPS**：首次推送可能弹出登录或使用 **私人令牌 / PAT**（Gitee：**设置 → 私人令牌**；GitHub：**Settings → Developer settings**）。Windows 可依赖 **Git Credential Manager**；认证失败时检查凭据管理器里是否存错账号（例如把 GitHub 密码当成了 Gitee）。
-- **国内网络**：Gitee 通常更稳定；需要双备份时再推 GitHub。
-- **历史注意**：曾提交过的敏感文件若已从当前版本删除，旧提交里仍可能存在；高合规场景需单独做历史清理（如 `git filter-repo`）并谨慎 force push。
-
-## 更新记录
-
-**2026-04-30**
-- ✓ 文档末尾新增「Git 同步到远端」：须让用户选择 GitHub / Gitee / 两者；说明远程名、推送命令与勿提交 `data/*.json`、`screenshots/**` 与密钥
-- ✓ 仓库不再跟踪 `screenshots/**`（`.gitignore`）；图表仅本地生成
-
-**2026-04-27**
-- ✓ 新增人均有效工作时长图表（08_avg_eff_worktim.sql）
-- ✓ 支持按模块-队列组合分组（S1-RA、S1-RB、S2-RC等）
-- ✓ 折线图空值自动断开，避免误导
-- ✓ 图表左右无留白，数据区域占满宽度
-- ✓ 更新总图表数量：38张 → 39张
-
-**2026-04-21**
-- ✓ 添加JSON metadata字段支持
-- ✓ 实现M0数据成熟度自动判断
-- ✓ 实现月同期对比逻辑
-- ✓ GRP图表全面美化
-- ✓ 支持催收员数量动态变化
-
-**2026-04-20**
-- ✓ 完成初始版本
+### SQL → JSON（`run_all.py` 命名规则）
+
+| SQL 文件 | 输出 JSON | 说明 |
+|----------|-----------|------|
+| `01_s_class_all.sql` | `s_class_all.json` | S 类 ALL |
+| `02_s_class_new.sql` | `s_class_new.json` | S 类 NEW |
+| `03_s_class_mtd.sql` | `s_class_mtd.json` | S 类 MTD |
+| `04_m1_assignment_repayment.sql` | `m1_assignment_repayment.json` | M1 分案回款 |
+| `05_m0_billing.sql` | `m0_billing.json` | M0 日账单（**含 metadata.data_fetch_date**，成熟度核心） |
+| `06_m0_billing_grouped.sql` | `m0_billing_grouped.json` | M0 分组（首逾等） |
+| `07_grp_collector.sql` | `grp_collector.json` | GRP 催收员/区域 |
+| `08_avg_eff_worktim.sql` | `avg_eff_worktim.json` | 人均有效工时（整体） |
+| `09_avg_eff_call_worktim.sql` | `avg_eff_call_worktim.json` | Call 维度（有 SQL 才有 JSON） |
+| `10_avg_eff_wa_worktim.sql` | `avg_eff_wa_worktim.json` | WA 维度（有 SQL 才有 JSON） |
+| `11_M2_class_all.sql` | `M2_class_all.json` | M2 单类型累积回款（整体） |
+| `12_M6_class_all.sql` | `M6_class_all.json` | M2–M6 账龄段（逾期 31–180 天）累积回款 |
+| `13_case_stock.sql` | `case_stock.json` | 人均库存 / 分案人力（含 `mth`、`case_group_type`、`col_type`，供九宫格大屏） |
+
+历史 Query ID 可参考 `code/sql/README.md`，**以线上查询计划为准**，不必与文档表逐字一致。
+
+### JSON → 图表脚本
+
+| 脚本 | 主要数据源 | 输出示例 | 张数（约） |
+|------|------------|----------|-----------|
+| `screen_s_class.py` | `s_class_*.json` | `recovery_rate_*.png`、三张对比表 `recovery_rate_S_table_*.png`（样式见 `chart_theme`：`TABLE_AX_BBOX`、`set_screen_table_title`） | 15 |
+| `screen_m1.py` | `m1_assignment_repayment.json` | `assignment_repayment_*.png`（3 柱线 + `assignment_repayment_table_*.png` 三表） | 6 |
+| `screen_m0.py` | `m0_billing.json`、`m0_billing_grouped.json` | `m0_*.png` | 8 |
+| `screen_grp.py` | `grp_collector.json` | `grp_*.png` | 12 |
+| `screen_avg_eff_worktime.py` | `avg_eff_worktim.json` 等（存在则画） | `avg_eff_worktime.png`、`avg_eff_call_worktime.png`、`avg_eff_wa_worktime.png` | 1～3 |
+| `screen_m2_m6.py` | `M2_class_all.json`、`M6_class_all.json` | `recovery_rate_M2_ALL.png`、`recovery_rate_M2_table_ALL.png`、`recovery_rate_M6_ALL.png`、`recovery_rate_M6_table_ALL.png`（风格对齐 S 类：组合图 + 对比表） | 4 |
+| `screen_case_stock.py` | `case_stock.json` | `case_stock_9grid.png`（3×3 人均库存 / 案件数 / 分案人数 × 非预测 / 预测 / 整体；下行表格填折线数值） | 1 |
+
+**PNG 总量**：以 `run_all_screens.py` 当次汇总为准；在含 M2/M6 与人均模块前提下常见 **约 50** 张（**+1** 张 `case_stock_9grid.png`，仍以目录计数为准）。
 
 ---
 
-**维护者**：Claude Code
-**最后更新**：2026-04-30（Git 同步章节：用户选择 GitHub/Gitee/两者；前置条件表与 SQL/JSON/图表说明校正）
+## 关键业务逻辑（摘要）
+
+### M0 成熟度与月同期
+
+- **数据获取日**：优先 `m0_billing.json` → `metadata.data_fetch_date`；缺失时代码会按「最后一笔有效账单」启发式推断（不如 metadata 准）。
+- **成熟期示例**：逾期 1d 口径成熟 **1** 天；7d 催回率成熟 **8** 天；30d 催回率成熟 **31** 天（与 `screen_m0.py` 一致）。
+- **月同期**：标题含「月同期」的图，各月截取到**与最新月相同的月内日**（如统一截至 19 日），避免最新月天数不足稀释对比。
+
+### GRP 同期
+
+- **作图口径**：`screen_grp.py` 在作图前会按 `mth` 排序，**只保留数据中最近的两个自然月**做对比与出图；若 SQL 返回多于 2 个月，较早月份会被丢弃（仅影响图表，不改变 `grp_collector.json` 文件本身）。
+- 历史月与最新月对齐到**相同日切**（见 `process_grp_data`），减轻月末效应。
+
+### GRP 催收员集合变化
+
+- 展示两个月并集；排序侧以**最新月**出现过的催收员为主；缺失补零（详见 `GRP_ROBUSTNESS.md`）。
+
+---
+
+## 图表与样式要点
+
+- **S 类**：3 口径 × 多 case_type；组合图与**对比纯表**（双行表头 S1/S2/S3 与下方月份列 **1–3 / 4–6 / 7–9** 对齐）；MTD 回款率允许 &gt;100%。
+- **M1**：整体 / 新案 / 老案各一张柱线组合图，另有三张与 S 类 `recovery_rate_S_table_*` 风格一致的**纯表图**（日 1–31 × 最近三月累积回款率）。
+- **M0**：逾期率（月/周）、催回率（周/月，7d/30d）、首逾占比、分首逾催回等；周起始与成熟度逻辑与数据脚本一致。
+- **GRP**：多 case_type 柱状/折线、配色与标签防叠处理。
+- **人均工时**：整体 / Call / WA 三套数据独立成图（数据存在才出图）。
+- **M2 / M2–M6**：`screen_m2_m6.py`；分母 **assigned_principal + overdue_added_principal**；多月堆叠柱 + 双轴累积回款率折线 + 日 1–31 × 最近三月对比表。
+- **case_stock**：`screen_case_stock.py`；堆叠顺序 **S1→S2→S3**，组内 **RA→RB→RC→RD**；第一行第三列 **堆叠**用第 1、2 列「折线」人均库存序列，**红线与该行第三列表**为 **不拆分 `col_type`** 的整体 `line_metrics`（与柱总高度不一定相等）；第二、三行仅柱、无折线；详见 `code/screens/README.md`。
+
+---
+
+## 注意事项
+
+- **勿随意改 SQL** 中的日期与窗口逻辑，除非业务方确认；改完需重跑 1→3→5。
+- **必须**保证 `m0_billing.json`（及 grouped）带正确 **`metadata.data_fetch_date`**，否则 M0 月同期与成熟度可能偏差。
+- 流水线顺序：**1 →（2.5）→ 3 → 5 →（5.5）→（7）**；跳过 3 可能把脏数据画进 PNG；模板或插图有变动时务必 **5.5** 再 **7**。
+
+---
+
+## 故障排查（简表）
+
+| 现象 | 常见原因 | 处理 |
+|------|----------|------|
+| 步骤 1 401 | Key 失效或未写入 mcp.json | 更新 `X-API-Key`，再 `--list` / 重跑 |
+| 步骤 3 报缺 JSON | 未跑全 `run_all.py` | 重新执行步骤 1 |
+| M0 图异常 | `data_fetch_date` 错或缺失 | 检查 metadata，必要时重拉数 |
+| 中文方块 | 无中文字体 | 安装雅黑/黑体等 |
+| 飞书 429 | API 限流 | 脚本内已有退避；稍后重试 |
+| 飞书占位图未替换 | `screenshots` 缺对应 PNG 或文件名与模板 `[...]` 不一致 | 对齐文件名或补跑步骤 5；跑 **5.5** 看 `template_analysis.json` 中 `missing_files` |
+| 飞书里某张图偶发「突然变得极小」 | 旧逻辑仅传 `replace_image.token`，开放平台宽高检测失败时兜底 **100px** | 当前脚本已：**原文件上传 + 显式传 width/height**；仍异常则检查模板是否把大图放在**极窄分栏**（列宽导致视觉上缩小） |
+| 日志 `[copy] wiki copy … 131006 permission denied` | 应用无知识库编辑/复制权限 | 将应用加入目标知识空间成员并开通 `wiki:node:copy` 等；见开放平台 wiki 文档 |
+| 日志 `[copy] …跳过复制模式` 后走克隆 | 复制失败（权限或文件夹 token） | 接受克隆（标题编号不继承），或配置 **`FEISHU_DST_FOLDER_TOKEN`** / 修好 wiki 权限后再跑 |
+| 强制始终用空白文档克隆 | 调试或与复制路径无关 | 环境变量 **`FEISHU_REPORT_USE_CLONE=1`** |
+
+---
+
+## 执行输出示例（节选）
+
+```
+[第1步] 执行 SQL…（`code/sql/*.sql` 全部）
+[第2步] 写入 data/*.json，metadata.data_fetch_date: …
+[第3步] 验证通过 / 或列出失败项
+[第5步] run_all_screens：各 screen_*.py 成功，screenshots PNG 数量汇总
+```
+
+---
+
+## 相关文件与可选工具
+
+| 用途 | 路径 |
+|------|------|
+| `code/` 总索引 | `../../code/README.md` |
+| SQL 说明 | `../../code/sql/README.md` |
+| 图表模块说明 | `../../code/screens/README.md` |
+| GRP 鲁棒性 | `../../code/screens/GRP_ROBUSTNESS.md` |
+| 飞书模板预检（推荐每次发文档前） | `../../template_analysis.json`（运行 `code/python/055_analyze_template/analyze_template.py` 生成） |
+| 飞书块结构历史/大块快照（可选） | `../../template_blocks.json`（若仓库内有，非 analyze 脚本默认产出） |
+
+---
+
+## 单步手动执行（调试）
+
+```powershell
+cd code/screens   # 或始终在根目录用 python 绝对路径调用
+python screen_s_class.py
+python screen_m1.py
+python screen_m0.py
+python screen_grp.py
+python screen_avg_eff_worktime.py
+python screen_m2_m6.py
+python screen_case_stock.py
+```
+
+---
+
+## Git 同步到远端（GitHub / Gitee）
+
+- **不要**提交：`data/**/*.json`、`screenshots/**`、密钥、`feishu_app.json` 等（以根目录 `.gitignore` 为准）；勿 `git add -f` 强行纳入。
+- **任何 `git push` 前**须请用户选择：**仅 origin（GitHub）/ 仅 gitee / 两者依次 push**。
+- 远程名常见：`origin` → GitHub，`gitee` → Gitee；`git remote -v` 查看。分支名以本地为准（多为 `main`）。
+
+---
+
+## 更新记录
+
+- **2026-05-03（文档：`case_stock` + `code/` README）**：数据映射补充 **`13_case_stock` / `case_stock.json`**；图表表补充 **`screen_case_stock.py`**；步骤 5 PNG 改为约 **50** 张量级；图表要点补充 **case_stock** 口径说明；相关文件表增加 **`code/README.md`**；单步调试增加 `screen_case_stock.py`。同步刷新 **`code/README.md`**、**`code/sql/README.md`**、**`code/screens/README.md`**。
+- **2026-05-02（飞书原图上传 + replace_image 宽高 + M2/M6）**：步骤 7 写明插图 **原文件字节上传**、`replace_image` **显式 width/height** 避免 **100px** 兜底；移除已废弃的 **`FEISHU_IMG_TARGET_WIDTH`**；分项 **G** / 前置表 **G** 改为「PNG 可用 IHDR，Pillow 可选兜底」。步骤 1 为 **`code/sql/*.sql` 全量**。数据映射与图表表补充 **`11_M2` / `12_M6`**、**`screen_m2_m6.py`**；步骤 5 PNG 约 **49**；故障表补充「极小图」；单步调试增加 `screen_m2_m6.py`。
+- **2026-05-02（飞书策略整理）**：步骤 7 写明 **默认 wiki 节点复制 → 云盘复制兜底 → `FEISHU_REPORT_USE_CLONE` 强制克隆**；**不在标题正文拼接序号**（原生编号仅复制模式）；克隆侧支持 **heading4～9** 与 **ordered.sequence** 等；故障表补充 **131006** 与 **`FEISHU_DST_FOLDER_TOKEN`**；路径约定增加 **`.cursor/skills/wkrpt/SKILL.md`** 可选同步说明。
+- **2026-05-02**：补充步骤 **5.5**（`analyze_template.py` → `template_analysis.json`）；飞书步骤建议「先 5.5 再 7」；修正模板产物说明（与 `template_blocks.json` 区分）；S/M1 六张对比表与约 **45** 张 PNG 提示；表头列对齐与 `chart_theme` 标题收紧说明；**`generate_feishu_report` 插图上传改为仅用 `requests` multipart，不再依赖 `requests_toolbelt`**；分项 **G** 改为可选 Pillow。
+- **2026-05-01**：按当前仓库重写 Skill — 10 条 SQL 与 JSON 命名、`03_validate_data` 为主校验、`run_all_screens` 动态发现、`m0_billing` / `grp_collector` / M1 PNG 命名修正；新增步骤 2.5、7（飞书）与 doc-guide 对齐说明；**移除** HTML 文档/镜像方案描述。
+- **2026-04-30**：Git 同步须用户选择远端；`screenshots` 不纳入版本库。
+- **2026-04-27 及更早**：人均工时 SQL/图表、metadata、M0 成熟度、GRP 美化等（详见历史提交与旧版 Skill）。
+
+**最后更新**：2026-05-03（`case_stock` 文档链：`wkrpt` + `code/*/README`）

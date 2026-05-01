@@ -9,6 +9,7 @@ if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
+import copy
 import requests
 import re
 import os
@@ -46,14 +47,38 @@ class FeishuReportGenerator:
         return False
 
     def get_wiki_document_id(self, wiki_token):
+        info = self.get_wiki_node_info(wiki_token)
+        return info["obj_token"] if info else None
+
+    def get_wiki_node_info(self, wiki_token):
+        """解析知识库节点：返回 obj_token、space_id、node_token（用于 wiki 内复制节点）。"""
         url = f"{self.base_url}/wiki/v2/spaces/get_node"
         headers = {"Authorization": f"Bearer {self.tenant_access_token}"}
         resp = requests.get(url, headers=headers, params={"token": wiki_token})
-        if resp.status_code == 200:
-            r = resp.json()
-            if r.get("code") == 0:
-                return r["data"]["node"]["obj_token"]
-        return None
+        if resp.status_code != 200:
+            return None
+        r = resp.json()
+        if r.get("code") != 0:
+            return None
+        data = r.get("data") or {}
+        node = data.get("node") or {}
+        obj_token = node.get("obj_token")
+        if not obj_token:
+            return None
+        space_id = (
+            node.get("space_id")
+            or data.get("space_id")
+            or (node.get("space") or {}).get("space_id")
+            or (node.get("space") or {}).get("id")
+        )
+        node_token = node.get("node_token") or wiki_token
+        parent_node_token = node.get("parent_node_token")
+        return {
+            "obj_token": obj_token,
+            "space_id": space_id,
+            "node_token": node_token,
+            "parent_node_token": parent_node_token,
+        }
 
     def get_document_blocks(self, document_id):
         all_blocks = []
@@ -90,13 +115,16 @@ class FeishuReportGenerator:
                 return r["data"]["document"]
         return None
 
-    def add_children_to_block(self, doc_id, block_id, children, debug_label="", max_retries=4):
-        """给指定块添加children；HTTP 429 限流时指数退避重试。"""
+    def add_children_to_block(self, doc_id, block_id, children, debug_label="", max_retries=4, index=None):
+        """给指定块添加children；HTTP 429 限流时指数退避重试。index 为插入位置（0 为首位，-1 为末尾）。"""
         import time
         url = f"{self.base_url}/docx/v1/documents/{doc_id}/blocks/{block_id}/children"
         headers = {"Authorization": f"Bearer {self.tenant_access_token}", "Content-Type": "application/json"}
+        payload = {"children": children}
+        if index is not None:
+            payload["index"] = index
         for attempt in range(max_retries + 1):
-            resp = requests.post(url, headers=headers, json={"children": children})
+            resp = requests.post(url, headers=headers, json=payload)
             if resp.status_code == 429:
                 # 指数退避：0.5s, 1s, 2s, 4s
                 wait = 0.5 * (2 ** attempt)
@@ -120,6 +148,344 @@ class FeishuReportGenerator:
             time.sleep(0.15)
             return r.get("data", {})
         return None
+
+    def _get_drive_parent_folder_token(self, file_token):
+        """云文档 file_token 所在文件夹 token，用于复制模板到同目录。"""
+        url = f"{self.base_url}/drive/v1/files/{file_token}"
+        headers = {"Authorization": f"Bearer {self.tenant_access_token}"}
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            return None
+        r = resp.json()
+        if r.get("code") != 0:
+            return None
+        data = r.get("data") or {}
+        meta = data.get("file") or data
+        return meta.get("parent_token")
+
+    def _copy_docx_file(self, src_token, dst_folder_token, dst_name):
+        """复制云文档，返回新 document_id（file_token）。失败返回 None。"""
+        headers = {"Authorization": f"Bearer {self.tenant_access_token}", "Content-Type": "application/json"}
+        tried = []
+        # 常见两种入口：explorer v2 与 drive v1
+        v2_url = f"{self.base_url}/drive/explorer/v2/file/copy/files/{src_token}"
+        r2 = requests.post(v2_url, headers=headers, json={
+            "type": "docx", "dst_folder_token": dst_folder_token, "dst_name": dst_name,
+        })
+        tried.append(("explorer_v2", r2.status_code, r2.text[:120] if r2.text else ""))
+        if r2.status_code == 200 and r2.json().get("code") == 0:
+            data = r2.json().get("data") or {}
+            nid = data.get("file_token") or data.get("token") or (data.get("file") or {}).get("token")
+            if nid:
+                return nid
+        v1_url = f"{self.base_url}/drive/v1/files/copy"
+        r1 = requests.post(v1_url, headers=headers, json={
+            "file_token": src_token, "type": "docx",
+            "dst_folder_token": dst_folder_token, "name": dst_name,
+        })
+        tried.append(("drive_v1", r1.status_code, r1.text[:120] if r1.text else ""))
+        if r1.status_code == 200 and r1.json().get("code") == 0:
+            data = r1.json().get("data") or {}
+            fil = data.get("file") or data
+            nid = fil.get("token") or data.get("file_token")
+            if nid:
+                return nid
+        print(f"   [copy] 复制接口均失败: {tried}")
+        return None
+
+    def _copy_wiki_docx_node(self, space_id, node_token, dst_title, parent_node_token=None):
+        """在知识库内复制 docx 节点（保留文档级标题编号等样式），返回新文档 obj_token。"""
+        import time
+        if not space_id or not node_token:
+            return None
+        sid_str = str(space_id).strip()
+        url = f"{self.base_url}/wiki/v2/spaces/{sid_str}/nodes/{node_token}/copy"
+        headers = {"Authorization": f"Bearer {self.tenant_access_token}", "Content-Type": "application/json"}
+        # 官方说明：目标知识空间 ID 与目标父节点不可同时为空；复制到同目录需带上 target_space_id（及父节点）
+        body = {"title": dst_title, "target_space_id": sid_str}
+        if parent_node_token:
+            body["target_parent_token"] = parent_node_token
+        for attempt in range(5):
+            resp = requests.post(url, headers=headers, json=body)
+            if resp.status_code == 429:
+                time.sleep(0.5 * (2 ** attempt))
+                continue
+            if resp.status_code != 200:
+                print(f"   [copy] wiki copy HTTP {resp.status_code}: {resp.text[:200]}")
+                return None
+            r = resp.json()
+            if r.get("code") != 0:
+                print(f"   [copy] wiki copy code={r.get('code')} msg={r.get('msg')}")
+                if r.get("code") == 131006:
+                    print("       -> 请在目标知识库中将应用加入为可编辑成员，并开通权限 wiki:node:copy / wiki:wiki")
+                    print("       -> 说明：https://open.feishu.cn/document/ukTMukTMukTM/uUDN04SN0QjL1QDN/wiki-v2/wiki-qa")
+                return None
+            node = (r.get("data") or {}).get("node") or {}
+            nid = node.get("obj_token")
+            if nid:
+                return nid
+            print(f"   [copy] wiki copy 响应无 obj_token: {str(r)[:200]}")
+            return None
+        return None
+
+    def _batch_delete_children(self, doc_id, parent_block_id, start_index, end_index, debug_label="", max_retries=4):
+        """删除父块子列表 [start_index, end_index)。"""
+        import time
+        url = f"{self.base_url}/docx/v1/documents/{doc_id}/blocks/{parent_block_id}/children/batch_delete"
+        headers = {"Authorization": f"Bearer {self.tenant_access_token}", "Content-Type": "application/json"}
+        body = {"start_index": start_index, "end_index": end_index}
+        for attempt in range(max_retries + 1):
+            resp = requests.delete(url, headers=headers, json=body)
+            if resp.status_code == 429:
+                time.sleep(0.5 * (2 ** attempt))
+                continue
+            if resp.status_code != 200:
+                print(f"\n   [API ERR] batch_delete {debug_label} -> HTTP {resp.status_code}: {resp.text[:200]}")
+                return None
+            r = resp.json()
+            if r.get("code") != 0:
+                if attempt < max_retries and r.get("code") in (99991663, 99991664, 1254607):
+                    time.sleep(0.5 * (2 ** attempt))
+                    continue
+                print(f"\n   [API ERR] batch_delete {debug_label} -> code={r.get('code')} msg={r.get('msg')}")
+                return None
+            time.sleep(0.15)
+            return r.get("data", {})
+        return None
+
+    def _patch_update_text_elements(self, doc_id, block_id, elements, max_retries=4):
+        """PATCH 更新块内文本 elements（须整块替换）。"""
+        import time
+        url = f"{self.base_url}/docx/v1/documents/{doc_id}/blocks/{block_id}"
+        headers = {"Authorization": f"Bearer {self.tenant_access_token}", "Content-Type": "application/json"}
+        body = {"update_text_elements": {"elements": elements}}
+        for attempt in range(max_retries + 1):
+            resp = requests.patch(url, headers=headers, json=body)
+            if resp.status_code == 429:
+                time.sleep(0.5 * (2 ** attempt))
+                continue
+            if resp.status_code != 200:
+                return False
+            r = resp.json()
+            if r.get("code") != 0:
+                if attempt < max_retries and r.get("code") in (99991663, 99991664, 1254607):
+                    time.sleep(0.5 * (2 ** attempt))
+                    continue
+                return False
+            time.sleep(0.15)
+            return True
+        return False
+
+    _PATCH_TEXT_BLOCK_TYPES = frozenset({
+        2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17,
+    })
+
+    def _elements_after_param_replace(self, elements):
+        """深拷贝 elements，替换 text_run 中的占位符；无变化返回 None。"""
+        if not isinstance(elements, list) or not elements:
+            return None
+        out = copy.deepcopy(elements)
+        changed = False
+        for el in out:
+            tr = el.get("text_run")
+            if not tr:
+                continue
+            old = tr.get("content", "")
+            new = self.replace_params_in_text(old)
+            if new != old:
+                tr["content"] = new
+                changed = True
+        return out if changed else None
+
+    def _root_skip_delete_half_open_ranges(self, root_children_ids, blocks_by_id):
+        """与 write_plan 一致的跳过区间：删「插入参数」说明直到「一、核心…」之前（不含结束标记块）。"""
+        skip_mode = False
+        indices = []
+        for i, cid in enumerate(root_children_ids):
+            block = blocks_by_id.get(cid)
+            if not block:
+                continue
+            ns = self._needs_skip(block)
+            if ns == "end_skip":
+                skip_mode = False
+                continue
+            if ns == "start_skip":
+                skip_mode = True
+                indices.append(i)
+                continue
+            if skip_mode:
+                indices.append(i)
+        if not indices:
+            return []
+        indices = sorted(set(indices))
+        ranges = []
+        s = e = indices[0]
+        for x in indices[1:]:
+            if x == e + 1:
+                e = x
+            else:
+                ranges.append((s, e + 1))
+                s = e = x
+        ranges.append((s, e + 1))
+        return ranges
+
+    def _png_jobs_grouped_by_parent(self, blocks, screenshots_dir):
+        """[(parent_id, [(idx, fname), ...]), ...]，每组内 idx 已降序。"""
+        from collections import defaultdict
+        by_id = {b["block_id"]: b for b in blocks}
+        parent_of = {}
+        for b in blocks:
+            for cid in b.get("children") or []:
+                parent_of[cid] = b["block_id"]
+        raw = []
+        for b in blocks:
+            m = self._is_png_placeholder(b)
+            if not m:
+                continue
+            fname = m.group(1)
+            if not (Path(screenshots_dir) / fname).exists():
+                continue
+            bid = b["block_id"]
+            pid = parent_of.get(bid)
+            if not pid or pid not in by_id:
+                continue
+            ch = by_id[pid].get("children") or []
+            if bid not in ch:
+                continue
+            idx = ch.index(bid)
+            raw.append((pid, idx, fname))
+        by_parent = defaultdict(list)
+        for pid, idx, fname in raw:
+            by_parent[pid].append((idx, fname))
+        out = []
+        for pid, lst in by_parent.items():
+            lst.sort(key=lambda t: -t[0])
+            out.append((pid, lst))
+        return out
+
+    def _created_child_block_id(self, add_data):
+        if not add_data:
+            return None
+        for c in add_data.get("children") or []:
+            if isinstance(c, dict) and c.get("block_id"):
+                return c["block_id"]
+            if isinstance(c, str):
+                return c
+        return None
+
+    def _report_via_copy_template(self, template_doc_id, template_blocks, output_title, screenshots_dir, img_placeholder_order, wiki_token=None):
+        """复制整篇模板再原地替换占位符与图片，保留飞书原生标题编号等多级列表样式。"""
+        import time
+        new_id = None
+        if wiki_token:
+            winfo = self.get_wiki_node_info(wiki_token)
+            if winfo and winfo.get("space_id"):
+                new_id = self._copy_wiki_docx_node(
+                    winfo["space_id"],
+                    winfo["node_token"],
+                    output_title,
+                    parent_node_token=winfo.get("parent_node_token"),
+                )
+                if new_id:
+                    print(f"   [copy] 已通过知识库复制模板（保留原生编号），document_id={new_id[:18]}…")
+        if not new_id:
+            folder = (os.environ.get("FEISHU_DST_FOLDER_TOKEN") or "").strip()
+            if not folder:
+                folder = self._get_drive_parent_folder_token(template_doc_id)
+            if not folder:
+                print("   [copy] 无法使用知识库复制且未取得云文档文件夹 token（可设置 FEISHU_DST_FOLDER_TOKEN），跳过复制模式")
+                return None
+            new_id = self._copy_docx_file(template_doc_id, folder, output_title)
+            if not new_id:
+                return None
+            print(f"   [copy] 已通过云盘复制模板（保留原生编号），document_id={new_id[:18]}…")
+
+        blocks = self.get_document_blocks(new_id)
+        if not blocks:
+            print("   [copy] 读取新文档块失败")
+            return None
+        by_id = {b["block_id"]: b for b in blocks}
+        page = next((b for b in blocks if b.get("block_type") == 1), None)
+        if not page:
+            print("   [copy] 新文档无根页面")
+            return None
+        root_ids = page.get("children") or []
+        for start, end in sorted(self._root_skip_delete_half_open_ranges(root_ids, by_id), key=lambda r: r[0], reverse=True):
+            self._batch_delete_children(new_id, page["block_id"], start, end, debug_label=f"skip [{start},{end})")
+            time.sleep(0.2)
+        blocks = self.get_document_blocks(new_id)
+        by_id = {b["block_id"]: b for b in blocks}
+        page = next((b for b in blocks if b.get("block_type") == 1), None)
+        if page:
+            self.blocks_by_id = by_id
+
+        img_placeholder_map = {n: None for n in img_placeholder_order}
+        for pid, lst in self._png_jobs_grouped_by_parent(blocks, screenshots_dir):
+            for idx, fname in lst:
+                if self._batch_delete_children(new_id, pid, idx, idx + 1, debug_label=f"png del {fname}") is None:
+                    continue
+                ad = self.add_children_to_block(
+                    new_id, pid, [{"block_type": 27, "image": {}}],
+                    debug_label=f"png add {fname}", index=idx,
+                )
+                nb = self._created_child_block_id(ad)
+                if nb:
+                    img_placeholder_map[fname] = nb
+                time.sleep(0.2)
+
+        blocks = self.get_document_blocks(new_id)
+        by_id = {b["block_id"]: b for b in blocks}
+
+        def dfs_patch(bid):
+            b = by_id.get(bid)
+            if not b:
+                return
+            bt = b.get("block_type")
+            if bt in self._PATCH_TEXT_BLOCK_TYPES:
+                bd = self._get_block_data(b)
+                if isinstance(bd, dict):
+                    upd = self._elements_after_param_replace(bd.get("elements"))
+                    if upd is not None:
+                        self._patch_update_text_elements(new_id, bid, upd)
+                        time.sleep(0.15)
+            for cid in b.get("children") or []:
+                dfs_patch(cid)
+
+        page = next((b for b in blocks if b.get("block_type") == 1), None)
+        if page:
+            for cid in page.get("children") or []:
+                dfs_patch(cid)
+
+        nd_url = f"https://www.feishu.cn/docx/{new_id}"
+        print("\n[上传图片]...")
+        screenshots_path = Path(screenshots_dir)
+        unmapped = [n for n in img_placeholder_order if not img_placeholder_map.get(n)]
+        if unmapped:
+            all_doc_blocks = self.get_document_blocks(new_id)
+            imgs = [b for b in all_doc_blocks if b.get("block_type") == 27]
+            used = set(v for v in img_placeholder_map.values() if v)
+            avail = [b for b in imgs if b["block_id"] not in used]
+            for i, name in enumerate(unmapped):
+                if i < len(avail):
+                    img_placeholder_map[name] = avail[i]["block_id"]
+                    print(f"   [后备] {name} -> block_id={avail[i]['block_id'][:12]}...")
+        up_ok = 0
+        for img_name in img_placeholder_order:
+            block_id = img_placeholder_map.get(img_name)
+            if not block_id:
+                print(f"   [WARN] 找不到图片块: {img_name}")
+                continue
+            img_path = screenshots_path / img_name
+            if not img_path.exists():
+                print(f"   [WARN] 文件不存在: {img_name}")
+                continue
+            if self._upload_image_to_block(new_id, block_id, str(img_path)):
+                up_ok += 1
+                print(f"   [OK] {img_name}")
+            else:
+                print(f"   [ERR] {img_name}")
+        print(f"\n[OK] 完成: 图片 {up_ok}/{len(img_placeholder_order)}")
+        return {"document_id": new_id, "url": nd_url, "title": output_title}
 
     # ==================== 参数计算 ====================
 
@@ -359,6 +725,9 @@ class FeishuReportGenerator:
     BT_MAP = {
         1: ("page", "page"), 2: ("text", "text"), 3: ("heading1", "heading1"),
         4: ("heading2", "heading2"), 5: ("heading3", "heading3"),
+        6: ("heading4", "heading4"), 7: ("heading5", "heading5"),
+        8: ("heading6", "heading6"), 9: ("heading7", "heading7"),
+        10: ("heading8", "heading8"), 11: ("heading9", "heading9"),
         12: ("bullet", "bullet"), 13: ("ordered", "ordered"),
         22: ("divider", "divider"),
         24: ("grid", "grid"), 25: ("grid_column", "grid_column"),
@@ -399,18 +768,25 @@ class FeishuReportGenerator:
 
         child = {"block_type": bt}
 
+        # 文本类块：深拷贝模板载荷再替换 elements，避免丢掉 ordered/bullet 的 style.sequence 等字段导致「序号丢失」
         if bt in (2, 12, 13):
-            elements = self._clone_elements(bd)
-            child[dk] = {"elements": elements}
-            # 复制块级样式（含 align 对齐等），保留原始排版格式
-            block_style = bd.get("style")
-            if block_style:
-                child[dk]["style"] = block_style
+            payload = copy.deepcopy(bd) if bd else {}
+            payload["elements"] = self._clone_elements(bd or {})
+            child[dk] = payload
+            if bt == 13:
+                st = child[dk].setdefault("style", {})
+                if not isinstance(st, dict):
+                    st = {}
+                    child[dk]["style"] = st
+                # 飞书有序列表依赖 style.sequence；API 偶发省略时需兜底，否则新建文档不显示编号
+                if "sequence" not in st:
+                    st["sequence"] = "auto"
         elif bt == 22:
             child[dk] = {}
-        elif bt in (3, 4, 5):
-            elements = self._clone_elements(bd)
-            child[dk] = {"elements": elements, "style": bd.get("style", {})}
+        elif 3 <= bt <= 11:
+            payload = copy.deepcopy(bd) if bd else {}
+            payload["elements"] = self._clone_elements(bd or {})
+            child[dk] = payload
         elif bt == 24:
             child[dk] = {"column_size": bd.get("column_size", 1)}
         elif bt == 25:
@@ -420,7 +796,44 @@ class FeishuReportGenerator:
         else:
             return None
 
+        self._polish_block_for_publish(child, bt)
         return child
+
+    def _join_text_runs(self, elements):
+        if not elements:
+            return ""
+        parts = []
+        for el in elements:
+            tr = el.get("text_run")
+            if tr:
+                parts.append(tr.get("content", ""))
+        return "".join(parts)
+
+    def _polish_block_for_publish(self, child, bt):
+        """写入飞书前微调版式：不修改仓库模板快照、不改 wiki 源模板，仅作用于本次克隆的块。"""
+        info = self.BT_MAP.get(bt)
+        if not info:
+            return
+        _, dk = info[0], info[1]
+        bd = child.get(dk)
+        if not isinstance(bd, dict):
+            return
+        elements = bd.get("elements")
+        if isinstance(elements, list):
+            for el in elements:
+                tr = el.get("text_run")
+                if not tr:
+                    continue
+                ts = tr.setdefault("text_element_style", {})
+                if 3 <= bt <= 11:
+                    ts["bold"] = True
+        if bt == 3 and isinstance(elements, list):
+            title_txt = self._join_text_runs(elements).strip()
+            st = bd.setdefault("style", {})
+            if title_txt.startswith(("一、", "二、")):
+                st["align"] = 2
+            else:
+                st.setdefault("align", 1)
 
     def _is_png_placeholder(self, block):
         text = self._get_block_text(block).strip()
@@ -433,6 +846,21 @@ class FeishuReportGenerator:
         if re.match(r'^一[、.,\s]*核心结果指标', text):
             return "end_skip"
         return False
+
+    def _print_feishu_doc_guide_alignment(self, blocks_tpl):
+        """对照已安装的 feishu-cli-doc-guide：说明与 Markdown 导入的差异，并做模板文本级快检（不修改飞书模板）。"""
+        blob = "\n".join(filter(None, (self._get_block_text(b) for b in blocks_tpl)))
+        low = blob.lower()
+        print("   [doc-guide] feishu-cli-doc-guide：docx API 克隆（wiki 模板只读）")
+        if "```mermaid" in low or "```plantuml" in low or "```puml" in low:
+            print("       [!] 模板中含 mermaid/plantuml 围栏 → Skill 面向 Markdown→画板；本脚本不解析围栏")
+        else:
+            print("       ✓ 未检出 ```mermaid / plantuml 围栏（Skill 第 3-4 章主要为导入场景）")
+        if re.search(r">\s*\[!([A-Z]+)\]", blob):
+            print("       [!] 检出类似 MD Callout（[!NOTE] 等）→ 克隆后为普通文本；飞书高亮块为块型 19")
+        else:
+            print("       ✓ 未检出 MD Callout 围栏（Skill 规则 8：NOTE/WARNING/…）")
+        print("       ✓ 图片：[*.png] → 上传 + replace_image（对齐 Skill TL;DR #10 思路）")
 
     # ==================== 主流程 ====================
 
@@ -463,6 +891,7 @@ class FeishuReportGenerator:
             print("[ERR] 无法读取模板")
             return None
         print(f"[OK] 获取 {len(blocks_tpl)} 个块")
+        self._print_feishu_doc_guide_alignment(blocks_tpl)
 
         # 分析: 文档结构
         page_tpl = next((b for b in blocks_tpl if b.get("block_type") == 1), None)
@@ -524,27 +953,11 @@ class FeishuReportGenerator:
         self.blocks_by_id = {b["block_id"]: b for b in blocks}
         print(f"[OK] 索引完成\n")
 
-        # 找到根page的children
-        page_block = None
-        for b in blocks:
-            if b.get("block_type") == 1:
-                page_block = b
-                break
-        if not page_block:
-            print("[ERR] 无法找到根页面")
-            return None
+        if not output_title:
+            output_title = f"催收周报（{datetime.now().strftime('%Y-%m-%d')}）"
 
-        root_children_ids = page_block.get("children", [])
-
-        # ============================================================
-        # 单次遍历模板，构建有序写入计划
-        # 保持grid和普通块在root children中的原始顺序
-        # ============================================================
-        print("[4/6] 解析模板结构...")
-
-        # ---- 收集所有图片占位符 ----
-        # 使用 dict: 文件名 -> block_id（创建空图片块后填充）
-        img_placeholder_map = {}  # filename -> block_id
+        # ---- 收集所有图片占位符（复制模式与克隆模式共用顺序） ----
+        img_placeholder_map = {}
         img_placeholder_order = []
         seen_img_blocks = set()
 
@@ -568,6 +981,39 @@ class FeishuReportGenerator:
 
         collect_placeholders(blocks)
         print(f"   [INFO] 收集到 {len(img_placeholder_order)} 个图片占位符")
+
+        use_clone_only = os.environ.get("FEISHU_REPORT_USE_CLONE", "").strip().lower() in ("1", "true", "yes")
+        if not use_clone_only:
+            wiki_node_token = wt if "/wiki/" in wiki_url else None
+            cr = self._report_via_copy_template(
+                doc_id, blocks, output_title, screenshots_dir, img_placeholder_order,
+                wiki_token=wiki_node_token,
+            )
+            if cr:
+                print("=" * 70)
+                print(f"文档: {cr['title']}")
+                print(f"链接: {cr['url']}")
+                print("=" * 70)
+                return cr
+            print("   [copy] 复制模板不可用，改用空白文档逐块克隆（原生标题编号无法继承）")
+
+        # 找到根page的children
+        page_block = None
+        for b in blocks:
+            if b.get("block_type") == 1:
+                page_block = b
+                break
+        if not page_block:
+            print("[ERR] 无法找到根页面")
+            return None
+
+        root_children_ids = page_block.get("children", [])
+
+        # ============================================================
+        # 单次遍历模板，构建有序写入计划
+        # 保持grid和普通块在root children中的原始顺序
+        # ============================================================
+        print("[4/6] 解析模板结构...")
 
         # ---- 单次遍历 root_children_ids，构建有序写入计划 ----
         # write_plan 中每个元素:
@@ -650,8 +1096,6 @@ class FeishuReportGenerator:
         # ============================================================
 
         print("[5/6] 创建并写入文档...")
-        if not output_title:
-            output_title = f"周报自动化 - {datetime.now().strftime('%Y年%m月%d日')}"
         nd = self.create_document(output_title)
         if not nd:
             print("[ERR] 文档创建失败")
@@ -679,7 +1123,7 @@ class FeishuReportGenerator:
         pending_grids = []
 
         def create_single_img_block(parent_id, img_name):
-            """创建一个图片块并记录其ID到映射中"""
+            """创建一个图片块并记录其ID到映射中，返回 block_id 或 None"""
             data = self.add_children_to_block(nd_id, parent_id,
                                               [{"block_type": 27, "image": {}}])
             if data is None:
@@ -863,25 +1307,70 @@ class FeishuReportGenerator:
         print("=" * 70)
         return {"document_id": nd_id, "url": nd_url, "title": output_title}
 
+    def _prepare_png_for_feishu(self, img_path: str) -> tuple[bytes, str, int, int]:
+        """使用磁盘上的原始文件字节上传：不缩放、不重新编码。
+
+        仅从文件读取像素宽高并传给 replace_image，避免飞书在未传宽高且检测失败时兜底为 100px。
+        """
+        from io import BytesIO
+        from pathlib import Path
+
+        p = Path(img_path)
+        name = p.name
+        raw = p.read_bytes()
+
+        def _png_size_from_bytes(data: bytes) -> tuple[int, int] | None:
+            if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n":
+                w = int.from_bytes(data[16:20], "big")
+                h = int.from_bytes(data[20:24], "big")
+                if w > 0 and h > 0:
+                    return w, h
+            return None
+
+        wh = _png_size_from_bytes(raw)
+        if wh:
+            return raw, name, wh[0], wh[1]
+
+        try:
+            from PIL import Image
+
+            with Image.open(BytesIO(raw)) as im:
+                w, h = im.size
+                if w > 0 and h > 0:
+                    return raw, name, w, h
+        except Exception:
+            pass
+
+        # 无法解析尺寸时的保守占位（不应常见于周报 PNG）
+        return raw, name, 1600, 900
+
     def _upload_image_to_block(self, doc_id, block_id, img_path):
         import time
+        import mimetypes
+
         try:
-            from requests_toolbelt.multipart.encoder import MultipartEncoder
-            import mimetypes
-            fn = os.path.basename(img_path)
-            with open(img_path, "rb") as f:
-                fc = f.read()
+            if not img_path:
+                return False
+            fc, fn, img_w, img_h = self._prepare_png_for_feishu(img_path)
+            img_w = max(1, min(int(img_w), 8192))
+            img_h = max(1, min(int(img_h), 8192))
             ct, _ = mimetypes.guess_type(img_path)
+            ct = ct or "image/png"
+            sz = len(fc)
             # 上传阶段也加 retry：429 时退避重试
+            # 使用 requests 内置 multipart（files + data），无需 requests_toolbelt
             ft = None
+            headers_auth = {"Authorization": f"Bearer {self.tenant_access_token}"}
+            post_url = f"{self.base_url}/drive/v1/medias/upload_all"
+            form_data = {
+                "file_name": fn,
+                "parent_type": "docx_image",
+                "parent_node": block_id,
+                "size": str(sz),
+            }
+            file_field = {"file": (fn, fc, ct)}
             for attempt in range(5):
-                md = MultipartEncoder(fields={
-                    "file_name": fn, "parent_type": "docx_image", "parent_node": block_id,
-                    "size": str(os.path.getsize(img_path)),
-                    "file": (fn, fc, ct or "image/png")
-                })
-                uh = {"Authorization": f"Bearer {self.tenant_access_token}", "Content-Type": md.content_type}
-                ur = requests.post(f"{self.base_url}/drive/v1/medias/upload_all", headers=uh, data=md)
+                ur = requests.post(post_url, headers=headers_auth, data=form_data, files=file_field)
                 if ur.status_code == 429:
                     time.sleep(0.5 * (2 ** attempt)); continue
                 if ur.status_code != 200 or ur.json().get("code") != 0:
@@ -890,11 +1379,12 @@ class FeishuReportGenerator:
                 break
             if not ft:
                 return False
+            repl = {"token": ft, "width": img_w, "height": img_h, "align": 2}
             for attempt in range(5):
                 pr = requests.patch(f"{self.base_url}/docx/v1/documents/{doc_id}/blocks/{block_id}",
                                     headers={"Authorization": f"Bearer {self.tenant_access_token}",
                                              "Content-Type": "application/json"},
-                                    json={"replace_image": {"token": ft}})
+                                    json={"replace_image": repl})
                 if pr.status_code == 429:
                     time.sleep(0.5 * (2 ** attempt)); continue
                 ok = pr.status_code == 200 and pr.json().get("code") == 0

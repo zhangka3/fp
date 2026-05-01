@@ -23,6 +23,8 @@ tmp_*.json
 # 操作系统
 Thumbs.db
 Desktop.ini
+# Windows 保留名误生成（勿提交）
+**/nul.png
 
 # Cursor 本地状态（可选：若希望同步规则可删掉下一行）
 .cursor/
@@ -32,3 +34,6 @@ data/**/*.json
 
 # 图表导出（本地运行产物，勿提交）
 screenshots/**
+
+# 飞书模板分析（本地可重复生成，勿默认提交）
+template_analysis.json

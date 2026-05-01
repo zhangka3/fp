@@ -11,10 +11,10 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 
-# 设置字体
-matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DengXian']
-matplotlib.rcParams['axes.unicode_minus'] = False
-font_prop = font_manager.FontProperties(family='DengXian')
+import chart_theme
+
+chart_theme.apply_chart_theme()
+font_prop = chart_theme.font_prop_dengxian()
 
 # 数据和输出目录
 DATA_DIR = Path(__file__).parent.parent.parent / 'data'
@@ -230,7 +230,7 @@ def generate_monthly_principal_overdue_rate(monthly_data):
 
     # 柱状图：到期金额
     x = np.arange(len(months))
-    bars = ax1.bar(x, principals, width=0.6, color='#FFB6C1', alpha=0.5)
+    bars = ax1.bar(x, principals, width=0.6, color=chart_theme.M0_VOLUME_BAR, alpha=0.90, edgecolor='#FFFFFF', linewidth=0.4)
     ax1.set_xlabel('月份', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.set_ylabel('到期金额（百万）', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.tick_params(axis='y', labelsize=10)
@@ -240,7 +240,7 @@ def generate_monthly_principal_overdue_rate(monthly_data):
 
     # 折线图：逾期率
     ax2 = ax1.twinx()
-    line = ax2.plot(x, overdue_rates, color='#EF5350', linewidth=2.5, marker='o', markersize=6)
+    line = ax2.plot(x, overdue_rates, color=chart_theme.M0_OVERDUE_LINE, linewidth=2.5, marker='o', markersize=6)
     ax2.set_ylabel('金额逾期率 (%)', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax2.tick_params(axis='y', labelsize=10)
     ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}%'))
@@ -253,7 +253,7 @@ def generate_monthly_principal_overdue_rate(monthly_data):
                     textcoords='offset points',
                     fontsize=15,
                     fontweight='bold',
-                    color='black',
+                    color=chart_theme.TEXT_PRIMARY,
                     ha='center',
                     fontproperties=font_prop)
 
@@ -261,11 +261,13 @@ def generate_monthly_principal_overdue_rate(monthly_data):
     max_rate = max(overdue_rates) if overdue_rates else 100
     ax2.set_ylim(bottom=0, top=max_rate * 1.15)
 
-    fig.suptitle('M0金额逾期率（按月同期）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color='black')
+    chart_theme.polish_twin_bars_and_lines(ax1, ax2, stacked_bars=False)
+
+    fig.suptitle('M0金额逾期率（按月同期）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color=chart_theme.TEXT_PRIMARY)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     output_path = OUTPUT_DIR / 'm0_principal_overdue_rate_monthly.png'
-    plt.savefig(output_path, dpi=100, bbox_inches='tight', facecolor='white')
+    chart_theme.save_figure(fig, output_path, dpi=150)
     plt.close()
 
     print(f'  OK: {output_path.name}')
@@ -292,7 +294,7 @@ def generate_monthly_count_overdue_rate(monthly_data):
     fig, ax1 = plt.subplots(figsize=(21, 12), dpi=100)
 
     x = np.arange(len(months))
-    bars = ax1.bar(x, counts, width=0.6, color='#87CEEB', alpha=0.6)
+    bars = ax1.bar(x, counts, width=0.6, color=chart_theme.M0_BAR_ALT, alpha=0.90, edgecolor='#FFFFFF', linewidth=0.4)
     ax1.set_xlabel('月份', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.set_ylabel('到期账单量', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.tick_params(axis='y', labelsize=10)
@@ -301,7 +303,7 @@ def generate_monthly_count_overdue_rate(monthly_data):
     ax1.set_xticklabels(month_labels, fontproperties=font_prop, fontsize=13, rotation=45)
 
     ax2 = ax1.twinx()
-    line = ax2.plot(x, overdue_rates, color='#FF7043', linewidth=2.5, marker='o', markersize=6)
+    line = ax2.plot(x, overdue_rates, color=chart_theme.M0_COUNT_LINE, linewidth=2.5, marker='o', markersize=6)
     ax2.set_ylabel('单量逾期率 (%)', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax2.tick_params(axis='y', labelsize=10)
     ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}%'))
@@ -314,7 +316,7 @@ def generate_monthly_count_overdue_rate(monthly_data):
                     textcoords='offset points',
                     fontsize=15,
                     fontweight='bold',
-                    color='black',
+                    color=chart_theme.TEXT_PRIMARY,
                     ha='center',
                     fontproperties=font_prop)
 
@@ -322,11 +324,13 @@ def generate_monthly_count_overdue_rate(monthly_data):
     max_rate = max(overdue_rates) if overdue_rates else 100
     ax2.set_ylim(bottom=0, top=max_rate * 1.15)
 
-    fig.suptitle('M0单量逾期率（按月同期）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color='black')
+    chart_theme.polish_twin_bars_and_lines(ax1, ax2, stacked_bars=False)
+
+    fig.suptitle('M0单量逾期率（按月同期）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color=chart_theme.TEXT_PRIMARY)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     output_path = OUTPUT_DIR / 'm0_count_overdue_rate_monthly.png'
-    plt.savefig(output_path, dpi=100, bbox_inches='tight', facecolor='white')
+    chart_theme.save_figure(fig, output_path, dpi=150)
     plt.close()
 
     print(f'  OK: {output_path.name}')
@@ -354,7 +358,7 @@ def generate_weekly_principal_overdue_rate(weekly_data):
     fig, ax1 = plt.subplots(figsize=(21, 12), dpi=100)
 
     x = np.arange(len(weeks))
-    bars = ax1.bar(x, principals, width=0.6, color='#FFB6C1', alpha=0.5)
+    bars = ax1.bar(x, principals, width=0.6, color=chart_theme.M0_VOLUME_BAR, alpha=0.90, edgecolor='#FFFFFF', linewidth=0.4)
     ax1.set_xlabel('周起始日期', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.set_ylabel('到期金额（百万）', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.tick_params(axis='y', labelsize=10)
@@ -363,7 +367,7 @@ def generate_weekly_principal_overdue_rate(weekly_data):
     ax1.set_xticklabels(week_labels, fontproperties=font_prop, fontsize=12, rotation=45)
 
     ax2 = ax1.twinx()
-    line = ax2.plot(x, overdue_rates, color='#E53935', linewidth=2.5, marker='o', markersize=6)
+    line = ax2.plot(x, overdue_rates, color=chart_theme.M0_OVERDUE_LINE, linewidth=2.5, marker='o', markersize=6)
     ax2.set_ylabel('金额逾期率 (%)', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax2.tick_params(axis='y', labelsize=10)
     ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}%'))
@@ -376,18 +380,20 @@ def generate_weekly_principal_overdue_rate(weekly_data):
                     textcoords='offset points',
                     fontsize=14,
                     fontweight='bold',
-                    color='black',
+                    color=chart_theme.TEXT_PRIMARY,
                     ha='center',
                     fontproperties=font_prop)
 
     max_rate = max(overdue_rates) if overdue_rates else 100
     ax2.set_ylim(bottom=0, top=max_rate * 1.15)
 
-    fig.suptitle('M0金额逾期率（按周）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color='black')
+    chart_theme.polish_twin_bars_and_lines(ax1, ax2, stacked_bars=False)
+
+    fig.suptitle('M0金额逾期率（按周）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color=chart_theme.TEXT_PRIMARY)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     output_path = OUTPUT_DIR / 'm0_principal_overdue_rate_weekly.png'
-    plt.savefig(output_path, dpi=100, bbox_inches='tight', facecolor='white')
+    chart_theme.save_figure(fig, output_path, dpi=150)
     plt.close()
 
     print(f'  OK: {output_path.name}')
@@ -452,7 +458,7 @@ def generate_weekly_collection_rate(weekly_data, data_fetch_date):
     fig, ax1 = plt.subplots(figsize=(21, 12), dpi=100)
 
     x = np.arange(len(weeks))
-    bars = ax1.bar(x, principals, width=0.6, color='#FFB6C1', alpha=0.5)
+    bars = ax1.bar(x, principals, width=0.6, color=chart_theme.M0_VOLUME_BAR, alpha=0.90, edgecolor='#FFFFFF', linewidth=0.4)
     ax1.set_xlabel('周起始日期', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.set_ylabel('到期金额（百万）', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.tick_params(axis='y', labelsize=10)
@@ -462,13 +468,7 @@ def generate_weekly_collection_rate(weekly_data, data_fetch_date):
 
     ax2 = ax1.twinx()
 
-    colors = {
-        '1d': '#F44336',
-        '3d': '#FF9800',
-        '7d': '#4CAF50',
-        '15d': '#2196F3',
-        '30d': '#9C27B0'
-    }
+    colors = dict(chart_theme.M0_WEEKLY_LINE_MAP)
 
     # 绘制每条线
     for period, rates in collection_rates.items():
@@ -489,7 +489,7 @@ def generate_weekly_collection_rate(weekly_data, data_fetch_date):
                             textcoords='offset points',
                             fontsize=13,
                             fontweight='bold',
-                            color='black',
+                            color=chart_theme.TEXT_PRIMARY,
                             fontproperties=font_prop)
 
     ax2.set_ylabel('金额催回率 (%)', fontsize=12, fontweight='bold', fontproperties=font_prop)
@@ -504,11 +504,13 @@ def generate_weekly_collection_rate(weekly_data, data_fetch_date):
 
     ax2.legend(loc='upper left', fontsize=10, prop=font_prop)
 
-    fig.suptitle('M0金额催回率（按周）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color='black')
+    chart_theme.polish_twin_bars_and_lines(ax1, ax2, stacked_bars=False)
+
+    fig.suptitle('M0金额催回率（按周）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color=chart_theme.TEXT_PRIMARY)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     output_path = OUTPUT_DIR / 'm0_collection_rate_weekly.png'
-    plt.savefig(output_path, dpi=100, bbox_inches='tight', facecolor='white')
+    chart_theme.save_figure(fig, output_path, dpi=150)
     plt.close()
 
     print(f'  OK: {output_path.name}')
@@ -565,7 +567,7 @@ def generate_monthly_collection_rate_7d_30d(rows, data_fetch_date):
     fig, ax1 = plt.subplots(figsize=(21, 12), dpi=100)
 
     x = np.arange(len(months))
-    bars = ax1.bar(x, principals, width=0.6, color='#FFB6C1', alpha=0.5)
+    bars = ax1.bar(x, principals, width=0.6, color=chart_theme.M0_VOLUME_BAR, alpha=0.90, edgecolor='#FFFFFF', linewidth=0.4)
     ax1.set_xlabel('月份', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.set_ylabel('到期金额（百万）', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax1.tick_params(axis='y', labelsize=10)
@@ -580,7 +582,7 @@ def generate_monthly_collection_rate_7d_30d(rows, data_fetch_date):
     if valid_7d_indices:
         valid_7d_x = [x[i] for i in valid_7d_indices]
         valid_7d_rates = [collection_rates_7d[i] for i in valid_7d_indices]
-        ax2.plot(valid_7d_x, valid_7d_rates, color='#4CAF50', linewidth=2.5, marker='o', markersize=6,
+        ax2.plot(valid_7d_x, valid_7d_rates, color=chart_theme.M0_COLLECTION_7D, linewidth=2.5, marker='o', markersize=6,
                 label='7d催回率', alpha=0.9)
 
     # 绘制30d催回率
@@ -588,7 +590,7 @@ def generate_monthly_collection_rate_7d_30d(rows, data_fetch_date):
     if valid_30d_indices:
         valid_30d_x = [x[i] for i in valid_30d_indices]
         valid_30d_rates = [collection_rates_30d[i] for i in valid_30d_indices]
-        ax2.plot(valid_30d_x, valid_30d_rates, color='#9C27B0', linewidth=2.5, marker='s', markersize=6,
+        ax2.plot(valid_30d_x, valid_30d_rates, color=chart_theme.M0_COLLECTION_30D, linewidth=2.5, marker='s', markersize=6,
                 label='30d催回率', alpha=0.9)
 
     # 智能标注
@@ -609,7 +611,7 @@ def generate_monthly_collection_rate_7d_30d(rows, data_fetch_date):
                         textcoords='offset points',
                         fontsize=14,
                         fontweight='bold',
-                        color='black',
+                        color=chart_theme.TEXT_PRIMARY,
                         ha='center',
                         fontproperties=font_prop)
 
@@ -627,7 +629,7 @@ def generate_monthly_collection_rate_7d_30d(rows, data_fetch_date):
                         textcoords='offset points',
                         fontsize=14,
                         fontweight='bold',
-                        color='black',
+                        color=chart_theme.TEXT_PRIMARY,
                         ha='center',
                         fontproperties=font_prop)
 
@@ -643,11 +645,13 @@ def generate_monthly_collection_rate_7d_30d(rows, data_fetch_date):
 
     ax2.legend(loc='upper left', fontsize=10, prop=font_prop)
 
-    fig.suptitle('M0金额催回率（7d/30d，按月同期）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color='black')
+    chart_theme.polish_twin_bars_and_lines(ax1, ax2, stacked_bars=False)
+
+    fig.suptitle('M0金额催回率（7d/30d，按月同期）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color=chart_theme.TEXT_PRIMARY)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     output_path = OUTPUT_DIR / 'm0_collection_rate_7d_30d_monthly.png'
-    plt.savefig(output_path, dpi=100, bbox_inches='tight', facecolor='white')
+    chart_theme.save_figure(fig, output_path, dpi=150)
     plt.close()
 
     print(f'  OK: {output_path.name}')
@@ -700,7 +704,7 @@ def generate_ind_ratio_chart(grouped_rows, data_fetch_date):
     fig, ax = plt.subplots(figsize=(21, 12), dpi=100)
 
     x = np.arange(len(months))
-    line = ax.plot(x, ind1_ratios, color='#2196F3', linewidth=2.5, marker='o', markersize=6)
+    line = ax.plot(x, ind1_ratios, color=chart_theme.M0_IND1_LINE, linewidth=2.5, marker='o', markersize=6)
     ax.set_xlabel('月份', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax.set_ylabel('IND1占比 (%)', fontsize=12, fontweight='bold', fontproperties=font_prop)
     ax.tick_params(axis='y', labelsize=10)
@@ -716,18 +720,20 @@ def generate_ind_ratio_chart(grouped_rows, data_fetch_date):
                     textcoords='offset points',
                     fontsize=15,
                     fontweight='bold',
-                    color='black',
+                    color=chart_theme.TEXT_PRIMARY,
                     ha='center',
                     fontproperties=font_prop)
 
     max_ratio = max(ind1_ratios) if ind1_ratios else 100
     ax.set_ylim(bottom=0, top=max_ratio * 1.15)
 
-    fig.suptitle('M0逾期金额中合并订单用户占比（按月）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color='black')
+    chart_theme.polish_ax_lines(ax, stroke_extra=3.2)
+
+    fig.suptitle('M0逾期金额中合并订单用户占比（按月）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color=chart_theme.TEXT_PRIMARY)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     output_path = OUTPUT_DIR / 'm0_ind1_ratio.png'
-    plt.savefig(output_path, dpi=100, bbox_inches='tight', facecolor='white')
+    chart_theme.save_figure(fig, output_path, dpi=150)
     plt.close()
 
     print(f'  OK: {output_path.name}')
@@ -819,7 +825,7 @@ def generate_ind_collection_rate_chart(grouped_rows, data_fetch_date):
         fig, ax1 = plt.subplots(figsize=(21, 12), dpi=100)
 
         x = np.arange(len(months))
-        bars = ax1.bar(x, principals, width=0.6, color='#FFB6C1', alpha=0.5)
+        bars = ax1.bar(x, principals, width=0.6, color=chart_theme.M0_VOLUME_BAR, alpha=0.90, edgecolor='#FFFFFF', linewidth=0.4)
         ax1.set_xlabel('月份', fontsize=12, fontweight='bold', fontproperties=font_prop)
         ax1.set_ylabel('逾期金额（百万）', fontsize=12, fontweight='bold', fontproperties=font_prop)
         ax1.tick_params(axis='y', labelsize=10)
@@ -834,14 +840,14 @@ def generate_ind_collection_rate_chart(grouped_rows, data_fetch_date):
         if valid_7d:
             valid_7d_x = [x[i] for i in valid_7d]
             valid_7d_rates = [collection_rates_7d[i] for i in valid_7d]
-            ax2.plot(valid_7d_x, valid_7d_rates, color='#4CAF50', linewidth=2.5, marker='o', markersize=6,
+            ax2.plot(valid_7d_x, valid_7d_rates, color=chart_theme.M0_COLLECTION_7D, linewidth=2.5, marker='o', markersize=6,
                     label='7d催回率', alpha=0.9)
 
         valid_30d = [i for i, r in enumerate(collection_rates_30d) if r is not None]
         if valid_30d:
             valid_30d_x = [x[i] for i in valid_30d]
             valid_30d_rates = [collection_rates_30d[i] for i in valid_30d]
-            ax2.plot(valid_30d_x, valid_30d_rates, color='#9C27B0', linewidth=2.5, marker='s', markersize=6,
+            ax2.plot(valid_30d_x, valid_30d_rates, color=chart_theme.M0_COLLECTION_30D, linewidth=2.5, marker='s', markersize=6,
                     label='30d催回率', alpha=0.9)
 
         # 智能标注
@@ -862,7 +868,7 @@ def generate_ind_collection_rate_chart(grouped_rows, data_fetch_date):
                             textcoords='offset points',
                             fontsize=14,
                             fontweight='bold',
-                            color='black',
+                            color=chart_theme.TEXT_PRIMARY,
                             ha='center',
                             fontproperties=font_prop)
 
@@ -880,7 +886,7 @@ def generate_ind_collection_rate_chart(grouped_rows, data_fetch_date):
                             textcoords='offset points',
                             fontsize=14,
                             fontweight='bold',
-                            color='black',
+                            color=chart_theme.TEXT_PRIMARY,
                             ha='center',
                             fontproperties=font_prop)
 
@@ -895,12 +901,14 @@ def generate_ind_collection_rate_chart(grouped_rows, data_fetch_date):
 
         ax2.legend(loc='upper left', fontsize=10, prop=font_prop)
 
+        chart_theme.polish_twin_bars_and_lines(ax1, ax2, stacked_bars=False)
+
         ind_label = '非合并订单用户' if ind_value == '0' else '合并订单用户'
-        fig.suptitle(f'M0金额催回率（7d/30d，{ind_label}，按月同期）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color='black')
+        fig.suptitle(f'M0金额催回率（7d/30d，{ind_label}，按月同期）', fontsize=24, fontweight='bold', fontproperties=font_prop, y=0.98, color=chart_theme.TEXT_PRIMARY)
         plt.tight_layout(rect=[0, 0, 1, 0.96])
 
         output_path = OUTPUT_DIR / f'm0_collection_rate_7d_30d_monthly_ind{ind_value}.png'
-        plt.savefig(output_path, dpi=100, bbox_inches='tight', facecolor='white')
+        chart_theme.save_figure(fig, output_path, dpi=150)
         plt.close()
 
         print(f'  OK: {output_path.name}')

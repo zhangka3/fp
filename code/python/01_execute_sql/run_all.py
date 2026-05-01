@@ -1,7 +1,7 @@
 """
 步骤 1+2 一站式：直接通过 HTTP 调 user-sql MCP，端到端跑完所有 SQL 并落盘 JSON。
 
-完全绕开 LLM 工具循环，10 个 SQL 端到端通常 < 5 分钟（瓶颈是 SQL 执行时间）。
+完全绕开 LLM 工具循环，sql 目录下全部 SQL 端到端并发执行（瓶颈是 SQL 执行时间）。
 
 用法:
     python run_all.py                    # 跑 sql/ 下所有 .sql

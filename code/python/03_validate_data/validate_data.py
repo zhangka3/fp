@@ -139,6 +139,64 @@ def validate_s_class(filename, desc=""):
     return True
 
 
+def validate_m2_class_all(filename, desc="M2·ALL"):
+    """M2 单类型：每日每月份唯一一行，case_type 均为 M2。"""
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在")
+        return False
+    header = data["header"]
+    rows = data["rows"]
+    idx = {name: i for i, name in enumerate(header)}
+    need = ("p_month", "day", "case_type", "assigned_principal", "overdue_added_principal", "repaid_principal")
+    if any(k not in idx for k in need):
+        print(f"  ✗ 缺少列: {need}")
+        return False
+    print(f"  行数: {len(rows)}")
+    types = {row[idx["case_type"]] for row in rows}
+    if types != {"M2"}:
+        print(f"  ✗ case_type 应为 M2，实际 {types}")
+        return False
+    per_day = defaultdict(int)
+    for row in rows:
+        per_day[(row[idx["p_month"]], row[idx["day"]])] += 1
+    bad = [k for k, v in per_day.items() if v != 1]
+    if bad:
+        print(f"  ✗ 有 {len(bad)} 个 (月,日) 重复或非 1 行: {bad[:5]}...")
+        return False
+    print(f"  ✓ 每日每月份 1 行，共 {len(per_day)} 个日切片")
+    return True
+
+
+def validate_m6_class_all(filename, desc="M2-M6账龄31-180天·ALL"):
+    """无 case_type：汇总序列，每日每月份唯一一行。"""
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在")
+        return False
+    header = data["header"]
+    rows = data["rows"]
+    idx = {name: i for i, name in enumerate(header)}
+    if "case_type" in idx:
+        print("  ⚠ 存在 case_type 列（预期为汇总无案件类型列）")
+    need = ("p_month", "day", "assigned_principal", "overdue_added_principal", "repaid_principal")
+    if any(k not in idx for k in need):
+        print(f"  ✗ 缺少列: {need}")
+        return False
+    print(f"  行数: {len(rows)}")
+    per_day = defaultdict(int)
+    for row in rows:
+        per_day[(row[idx["p_month"]], row[idx["day"]])] += 1
+    bad = [k for k, v in per_day.items() if v != 1]
+    if bad:
+        print(f"  ✗ 有 {len(bad)} 个 (月,日) 重复或非 1 行: {bad[:5]}...")
+        return False
+    print(f"  ✓ 每日每月份 1 行，共 {len(per_day)} 个日切片")
+    return True
+
+
 def validate_m1(filename, desc="M1分案回款"):
     print(f"\n[{desc}] {filename}")
     data = _load(filename)
@@ -302,6 +360,8 @@ VALIDATORS = {
     'avg_eff_worktim.json':          (validate_avg_eff_worktim, '人均有效工时'),
     'avg_eff_call_worktim.json':     (validate_avg_eff_worktim, '人均通话工时'),
     'avg_eff_wa_worktim.json':       (validate_avg_eff_worktim, '人均WA工时'),
+    'M2_class_all.json':             (validate_m2_class_all,    'M2·ALL'),
+    'M6_class_all.json':             (validate_m6_class_all,    'M2-M6账龄31-180天'),
 }
 
 

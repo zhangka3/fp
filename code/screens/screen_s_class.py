@@ -13,9 +13,9 @@ import numpy as np
 import os
 from pathlib import Path
 
-# 设置中文字体
-matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DengXian']
-matplotlib.rcParams['axes.unicode_minus'] = False
+import chart_theme
+
+chart_theme.apply_chart_theme()
 
 # 数据和输出目录
 DATA_DIR = Path(__file__).parent.parent.parent / 'data'
@@ -127,8 +127,8 @@ def generate_single_chart(data, case_type, assign_type):
     fig, ax1 = plt.subplots(figsize=(14, 6))
 
     months = sorted(chart_data.keys())
-    colors = {'2026-01': '#FFD93D', '2026-02': '#FF6B6B', '2026-03': '#4ECDC4', '2026-04': '#45B7D1'}
-    month_labels = {'2026-01': '1月', '2026-02': '2月', '2026-03': '3月', '2026-04': '4月'}
+    colors = chart_theme.month_color_dict(months)
+    month_labels = {m: chart_theme.month_label_cn(m) for m in months}
 
     # 确定最大天数
     max_day = max([max(chart_data[m]['days']) for m in months])
@@ -152,7 +152,7 @@ def generate_single_chart(data, case_type, assign_type):
         ax1.bar(x_positions, assigned_by_day[1:],
                bottom=bottom_values,
                color=colors[month],
-               alpha=0.7)
+               alpha=0.85)
 
         bottom_values += np.array(assigned_by_day[1:])
 
@@ -168,7 +168,7 @@ def generate_single_chart(data, case_type, assign_type):
     ax1.set_xlim(0.5, max_day + 0.5)
     ax1.set_xticks(range(1, max_day + 1))
     ax1.tick_params(axis='x', labelsize=8)
-    ax1.grid(True, alpha=0.3, axis='y')
+    chart_theme.style_axes_light(ax1, grid_axis='y')
 
     # === 右轴：累积回款率line ===
     ax2 = ax1.twinx()
@@ -187,18 +187,20 @@ def generate_single_chart(data, case_type, assign_type):
         if days:
             last_day = days[-1]
             last_rate = cum_rate[-1]
-            ax2.plot(last_day, last_rate, 'o', color='black', markersize=6, zorder=10)
+            ax2.plot(last_day, last_rate, 'o', color=chart_theme.LAST_POINT_MARKER, markersize=6, zorder=10)
             ax2.annotate(f'{last_rate:.2f}%',
                         xy=(last_day, last_rate),
                         xytext=(6, 6),
                         textcoords='offset points',
                         fontsize=9,
                         fontweight='bold',
-                        color='black')
+                        color=chart_theme.ANNOTATE_COLOR)
 
     ax2.set_ylabel('累积回款率 (%)', fontsize=12, color='black')
     ax2.tick_params(axis='y', labelcolor='black')
     ax2.legend(loc='upper left', prop={'size': 10})
+
+    chart_theme.polish_twin_bars_and_lines(ax1, ax2, stacked_bars=True)
 
     # 标题
     plt.title(f'{case_type} 累积回款率 ({type_label})', fontsize=14, fontweight='bold', pad=15)
@@ -207,7 +209,7 @@ def generate_single_chart(data, case_type, assign_type):
 
     # 保存到screenshots目录
     filename = OUTPUT_DIR / f'recovery_rate_{case_type}_{assign_type.upper()}.png'
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    chart_theme.save_figure(fig, filename, dpi=150)
     plt.close()
 
     print(f"  OK: {filename.name}")
@@ -287,11 +289,10 @@ def generate_combined_chart(data, assign_type):
     # 绘图
     fig, axes = plt.subplots(3, 1, figsize=(16, 10))
 
-    colors = {'2026-01': '#FFD93D', '2026-02': '#FF6B6B', '2026-03': '#4ECDC4', '2026-04': '#45B7D1'}
-    month_labels = {'2026-01': '1月', '2026-02': '2月', '2026-03': '3月', '2026-04': '4月'}
-
     case_types = ['S1', 'S2', 'S3']
     months = sorted(chart_data[case_types[0]].keys())
+    colors = chart_theme.month_color_dict(months)
+    month_labels = {m: chart_theme.month_label_cn(m) for m in months}
 
     for idx, case_type in enumerate(case_types):
         ax1 = axes[idx]
@@ -299,7 +300,8 @@ def generate_combined_chart(data, assign_type):
 
         # Bar: 累积分案金额
         bar_width = 0.2
-        offsets = {'2026-01': -1.5*bar_width, '2026-02': -0.5*bar_width, '2026-03': 0.5*bar_width, '2026-04': 1.5*bar_width}
+        n_m = len(months)
+        offsets = {m: (i - (n_m - 1) / 2) * bar_width for i, m in enumerate(months)}
 
         for month in months:
             if month not in chart_data[case_type]:
@@ -312,9 +314,9 @@ def generate_combined_chart(data, assign_type):
             ax1.bar(days + offsets[month], cum_assigned,
                    bar_width,
                    color=colors[month],
-                   alpha=0.7,
-                   edgecolor='black',
-                   linewidth=0.5)
+                   alpha=0.88,
+                   edgecolor='#FFFFFF',
+                   linewidth=0.45)
 
         ax1.set_ylabel('累积分案金额 (百万)', fontsize=11, fontweight='bold')
         ax1.tick_params(axis='y', labelsize=9)
@@ -345,14 +347,14 @@ def generate_combined_chart(data, assign_type):
             if days:
                 last_day = days[-1]
                 last_rate = cum_rate[-1]
-                ax2.plot(last_day, last_rate, 'o', color='black', markersize=6, zorder=10)
+                ax2.plot(last_day, last_rate, 'o', color=chart_theme.LAST_POINT_MARKER, markersize=6, zorder=10)
                 ax2.annotate(f'{last_rate:.2f}%',
                             xy=(last_day, last_rate),
                             xytext=(6, 6),
                             textcoords='offset points',
                             fontsize=9,
                             fontweight='bold',
-                            color='black')
+                            color=chart_theme.ANNOTATE_COLOR)
 
         ax2.set_ylabel('累积回款率 (%)', fontsize=11, fontweight='bold')
         ax2.tick_params(axis='y', labelsize=9)
@@ -369,17 +371,19 @@ def generate_combined_chart(data, assign_type):
         ax1.set_xticks(range(1, 32))
         ax1.set_xticklabels(range(1, 32))
         ax1.tick_params(axis='x', labelsize=8)
-        ax1.grid(True, alpha=0.3, axis='y')
+        chart_theme.style_axes_light(ax1, grid_axis='y')
 
         # 图例
         if idx == 0:
             ax2.legend(loc='upper left', frameon=True, fontsize=9)
 
+        chart_theme.polish_twin_bars_and_lines(ax1, ax2, stacked_bars=False)
+
     plt.tight_layout()
 
     # 保存
     filename = OUTPUT_DIR / f'recovery_rate_S_combined_{assign_type.upper()}.png'
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    chart_theme.save_figure(fig, filename, dpi=150)
     plt.close()
 
     print(f"  OK: {filename.name}")
@@ -452,8 +456,12 @@ def generate_table_chart(data, assign_type):
 
     # 准备表格数据
     case_types = ['S1', 'S2', 'S3']
-    months = ['2026-02', '2026-03', '2026-04']
-    month_labels = {'2026-02': '2月', '2026-03': '3月', '2026-04': '4月'}
+    _all_m = sorted({m for ct in chart_data for m in chart_data[ct]})
+    months = _all_m[-3:]
+    while len(months) < 3:
+        months = [''] + months
+    months = months[-3:]
+    month_labels = {m: chart_theme.month_label_cn(m) if m else '' for m in months}
 
     # 构建表格数据
     table_data = []
@@ -472,74 +480,48 @@ def generate_table_chart(data, assign_type):
                     row.append("-")
         table_data.append(row)
 
-    # 创建图表
+    # 创建图表（外圈浅底 + 表体留白，样式由 chart_theme 统一）
     fig, ax = plt.subplots(figsize=(14, 11))
-    ax.axis('tight')
-    ax.axis('off')
+    chart_theme.prepare_screen_table_figure(fig, ax)
 
-    # 表头
     header_row1 = ['', '', 'S1', '', '', 'S2', '', '', 'S3', '']
     header_row2 = ['Day'] + [month_labels[m] for _ in case_types for m in months]
 
     full_table_data = [header_row1, header_row2] + table_data
 
-    # 绘制表格
-    table = ax.table(cellText=full_table_data,
-                    cellLoc='center',
-                    loc='center',
-                    bbox=[0, 0, 1, 1])
+    table = ax.table(
+        cellText=full_table_data,
+        cellLoc='center',
+        loc='center',
+        bbox=chart_theme.TABLE_AX_BBOX,
+    )
 
     table.auto_set_font_size(False)
     font_prop = font_manager.FontProperties(family='DengXian')
 
-    # 设置样式
-    # 第一行（合并单元格效果）
-    for col in range(10):
-        cell = table[(0, col)]
-        cell.set_facecolor('white')
-        cell.set_height(0.022)
-        cell.set_linewidth(1)
-        cell.set_edgecolor('black')
+    ncol = 10
+    chart_theme.style_screen_table_s_headers(table, ncol=ncol, font_prop=font_prop)
+    chart_theme.style_screen_table_body(
+        table,
+        data_row_start=2,
+        nrows=len(full_table_data),
+        ncol=ncol,
+        font_prop=font_prop,
+        day_col=0,
+        percent_cols=frozenset(range(1, ncol)),
+        data_fontsize=8,
+    )
 
-        if col == 0:
-            cell.set_text_props(color='white')
-        elif col in [2, 5, 8]:  # S1, S2, S3位置
-            cell.set_text_props(weight='bold', color='black', fontproperties=font_prop, fontsize=14)
-        else:
-            cell.set_text_props(color='white')
-
-    # 第二行（月份标签）
-    for col in range(10):
-        cell = table[(1, col)]
-        cell.set_facecolor('#E0E0E0')
-        cell.set_height(0.022)
-        cell.set_linewidth(1)
-        cell.set_edgecolor('black')
-        cell.set_text_props(weight='bold', fontproperties=font_prop, fontsize=10)
-
-    # 数据行
-    for row in range(2, len(full_table_data)):
-        for col in range(10):
-            cell = table[(row, col)]
-            cell.set_height(0.02)
-            cell.set_fontsize(8)
-            cell.set_text_props(fontproperties=font_prop)
-            cell.set_linewidth(0.5)
-            cell.set_edgecolor('gray')
-
-            # Day列加粗
-            if col == 0:
-                cell.set_text_props(weight='bold', fontproperties=font_prop)
-                cell.set_facecolor('#F5F5F5')
-
-    plt.title(f'S1/S2/S3 累积回款率对比表 ({type_label})',
-             fontsize=16,
-             fontweight='bold',
-             pad=20)
+    chart_theme.set_screen_table_title(ax, f'S1/S2/S3 累积回款率对比表 ({type_label})')
 
     # 保存
     filename = OUTPUT_DIR / f'recovery_rate_S_table_{assign_type.upper()}.png'
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    chart_theme.save_figure(
+        fig,
+        filename,
+        dpi=150,
+        save_facecolor=chart_theme.AXES_PANEL if chart_theme.VISUAL_STYLE == "dashboard" else chart_theme.FIG_FACE,
+    )
     plt.close()
 
     print(f"  OK: {filename.name}")
