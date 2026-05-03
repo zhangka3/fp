@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """飞书周报文档生成器 - 保留完整格式（含grid分栏）"""
 
@@ -280,21 +280,135 @@ class FeishuReportGenerator:
         2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17,
     })
 
+    _PARAM_BRACE_RE = re.compile(r'\{(\w+)\}')
+
+    def _replace_bracket_shortcuts(self, text: str) -> str:
+        if not text:
+            return text
+        return (
+            text.replace("[DD1]", str(self.params.get("DD1", "")))
+            .replace("[DD]", str(self.params.get("DD", "")))
+            .replace("[mm]", str(self.params.get("mm", "")))
+        )
+
+    @staticmethod
+    def _parse_scalar_for_dif_rule(raw):
+        """将参数值解析为 float；无法解析则 None（走非数值直接替换）。"""
+        if raw is None:
+            return None
+        t = str(raw).strip().replace(",", "")
+        if not t:
+            return None
+        if t.endswith("%"):
+            t = t[:-1].strip()
+        t = t.replace("−", "-").replace("—", "-")
+        try:
+            return float(t)
+        except ValueError:
+            return None
+
+    def _dif_rise_style(self, base: dict) -> dict:
+        st = copy.deepcopy(base) if base else {}
+        st["bold"] = True
+        st["text_color"] = 4  # 飞书枚举：绿色
+        return st
+
+    def _dif_fall_style(self, base: dict) -> dict:
+        st = copy.deepcopy(base) if base else {}
+        st["bold"] = True
+        st["text_color"] = 1  # 飞书枚举：红色
+        return st
+
+    def _merge_adjacent_same_style_runs(self, runs: list) -> list:
+        if not runs:
+            return []
+        merged = [{"content": runs[0]["content"], "text_element_style": runs[0]["text_element_style"]}]
+        for r in runs[1:]:
+            if r["text_element_style"] == merged[-1]["text_element_style"]:
+                merged[-1]["content"] += r["content"]
+            else:
+                merged.append({"content": r["content"], "text_element_style": r["text_element_style"]})
+        return merged
+
+    def _param_replace_text_runs(self, content, base_style=None):
+        """将一段 text_run 的 content 展开为若干 {content, text_element_style}（处理 *dif 上升/下降着色）。"""
+        base_style = base_style or {}
+        content = self._replace_bracket_shortcuts(content)
+        out = []
+        i = 0
+        n = len(content)
+        while i < n:
+            m = self._PARAM_BRACE_RE.search(content, i)
+            if not m:
+                tail = content[i:]
+                if tail:
+                    out.append({"content": tail, "text_element_style": copy.deepcopy(base_style)})
+                break
+            if m.start() > i:
+                out.append({"content": content[i:m.start()], "text_element_style": copy.deepcopy(base_style)})
+            key = m.group(1)
+            val = self.params.get(key)
+            val_str = "" if val is None else str(val)
+            ph_end = m.end()
+            has_pp = ph_end + 2 <= n and content[ph_end : ph_end + 2] == "pp"
+
+            if key.endswith("dif"):
+                num = self._parse_scalar_for_dif_rule(val)
+                if num is not None:
+                    prefix = "上升" if num >= 0 else "下降"
+                    extra = "pp" if has_pp else ""
+                    styled = prefix + val_str + extra
+                    # 金额/单量逾期率差分：>=0 红、<0 绿（「坏」上升）；其余 *dif 仍 >=0 绿、<0 红
+                    invert_od = key in ("rate_prin_od_dif", "rate_cnt_od_dif")
+                    if invert_od:
+                        st = self._dif_fall_style(base_style) if num >= 0 else self._dif_rise_style(base_style)
+                    else:
+                        st = self._dif_rise_style(base_style) if num >= 0 else self._dif_fall_style(base_style)
+                    out.append({"content": styled, "text_element_style": st})
+                    i = ph_end + (2 if has_pp else 0)
+                    continue
+                out.append({"content": val_str, "text_element_style": copy.deepcopy(base_style)})
+                i = ph_end
+                continue
+
+            out.append({"content": val_str, "text_element_style": copy.deepcopy(base_style)})
+            i = ph_end
+
+        if not out:
+            return [{"content": content, "text_element_style": copy.deepcopy(base_style)}]
+        return self._merge_adjacent_same_style_runs(out)
+
     def _elements_after_param_replace(self, elements):
         """深拷贝 elements，替换 text_run 中的占位符；无变化返回 None。"""
         if not isinstance(elements, list) or not elements:
             return None
-        out = copy.deepcopy(elements)
+        out = []
         changed = False
-        for el in out:
+        for el in copy.deepcopy(elements):
             tr = el.get("text_run")
             if not tr:
+                out.append(el)
                 continue
             old = tr.get("content", "")
-            new = self.replace_params_in_text(old)
-            if new != old:
-                tr["content"] = new
-                changed = True
+            base = tr.get("text_element_style") or {}
+            runs = self._param_replace_text_runs(old, base)
+            if (
+                len(runs) == 1
+                and runs[0]["content"] == old
+                and runs[0]["text_element_style"] == base
+            ):
+                out.append(el)
+                continue
+            changed = True
+            for r in runs:
+                out.append(
+                    {
+                        "text_run": {
+                            "content": r["content"],
+                            "text_element_style": r["text_element_style"],
+                        }
+                    }
+                )
         return out if changed else None
 
     def _root_skip_delete_half_open_ranges(self, root_children_ids, blocks_by_id):
@@ -330,7 +444,11 @@ class FeishuReportGenerator:
         return ranges
 
     def _png_jobs_grouped_by_parent(self, blocks, screenshots_dir):
-        """[(parent_id, [(idx, fname), ...]), ...]，每组内 idx 已降序。"""
+        """[(parent_id, jobs), ...]；jobs 为 (idx, kind, data) 列表，idx 降序。
+
+        kind 为 \"single\" 时 data 为 str（文件名）；为 \"multi\" 时 data 为 str 列表
+        （同一文本块内连续多个 [a.png][b.png]，一次删块并插入多张图）。
+        """
         from collections import defaultdict
         by_id = {b["block_id"]: b for b in blocks}
         parent_of = {}
@@ -339,11 +457,10 @@ class FeishuReportGenerator:
                 parent_of[cid] = b["block_id"]
         raw = []
         for b in blocks:
-            m = self._is_png_placeholder(b)
-            if not m:
+            fnames = self._ordered_png_placeholder_fnames(b)
+            if not fnames:
                 continue
-            fname = m.group(1)
-            if not (Path(screenshots_dir) / fname).exists():
+            if not all((Path(screenshots_dir) / f).exists() for f in fnames):
                 continue
             bid = b["block_id"]
             pid = parent_of.get(bid)
@@ -353,10 +470,13 @@ class FeishuReportGenerator:
             if bid not in ch:
                 continue
             idx = ch.index(bid)
-            raw.append((pid, idx, fname))
+            if len(fnames) == 1:
+                raw.append((pid, idx, "single", fnames[0]))
+            else:
+                raw.append((pid, idx, "multi", list(fnames)))
         by_parent = defaultdict(list)
-        for pid, idx, fname in raw:
-            by_parent[pid].append((idx, fname))
+        for pid, idx, kind, data in raw:
+            by_parent[pid].append((idx, kind, data))
         out = []
         for pid, lst in by_parent.items():
             lst.sort(key=lambda t: -t[0])
@@ -372,6 +492,18 @@ class FeishuReportGenerator:
             if isinstance(c, str):
                 return c
         return None
+
+    def _created_child_block_ids(self, add_data):
+        """add_children 一次写入多个子块时，按返回顺序列出 block_id。"""
+        if not add_data:
+            return []
+        out = []
+        for c in add_data.get("children") or []:
+            if isinstance(c, dict) and c.get("block_id"):
+                out.append(c["block_id"])
+            elif isinstance(c, str):
+                out.append(c)
+        return out
 
     def _report_via_copy_template(self, template_doc_id, template_blocks, output_title, screenshots_dir, img_placeholder_order, wiki_token=None):
         """复制整篇模板再原地替换占位符与图片，保留飞书原生标题编号等多级列表样式。"""
@@ -421,16 +553,25 @@ class FeishuReportGenerator:
 
         img_placeholder_map = {n: None for n in img_placeholder_order}
         for pid, lst in self._png_jobs_grouped_by_parent(blocks, screenshots_dir):
-            for idx, fname in lst:
-                if self._batch_delete_children(new_id, pid, idx, idx + 1, debug_label=f"png del {fname}") is None:
+            for idx, kind, data in lst:
+                if kind == "single":
+                    fname = data
+                    label = fname
+                    fnames = [fname]
+                else:
+                    fnames = data
+                    label = "+".join(fnames)
+                if self._batch_delete_children(new_id, pid, idx, idx + 1, debug_label=f"png del {label}") is None:
                     continue
+                children = [{"block_type": 27, "image": {}} for _ in fnames]
                 ad = self.add_children_to_block(
-                    new_id, pid, [{"block_type": 27, "image": {}}],
-                    debug_label=f"png add {fname}", index=idx,
+                    new_id, pid, children,
+                    debug_label=f"png add {label}", index=idx,
                 )
-                nb = self._created_child_block_id(ad)
-                if nb:
-                    img_placeholder_map[fname] = nb
+                nb_list = self._created_child_block_ids(ad)
+                for fname, nb in zip(fnames, nb_list):
+                    if nb:
+                        img_placeholder_map[fname] = nb
                 time.sleep(0.2)
 
         blocks = self.get_document_blocks(new_id)
@@ -537,11 +678,14 @@ class FeishuReportGenerator:
         except Exception:
             self._set_default_data_params()
 
-        # 计算周维度催回率参数（从m0_billing_grouped.json计算）
+        # 计算周维度催回率参数（从 m0_billing.json）
         self._calculate_weekly_collection_rates()
 
-        # 计算月维度催回率参数（从m0_billing.json计算，与 m0_collection_rate_7d_30d_monthly.png 对齐）
+        # 计算月维度催回率参数（从 m0_billing.json，与 m0_collection_rate_7d_30d_monthly.png 对齐）
         self._calculate_monthly_collection_rates()
+
+        # 合并订单/非合并 7d 月催回 + IND1 占比（从 m0_billing_grouped.json，与 screen_m0 分图对齐）
+        self._calculate_monthly_ind_from_grouped()
 
     def _calculate_weekly_collection_rates(self):
         """计算 {wk_colrate7d}, {wk_colrate7d_dif}, {wk_colrate15d}, {wk_colrate15d_dif}
@@ -698,10 +842,134 @@ class FeishuReportGenerator:
             print(f"   [WARN] 月催回率计算失败: {e}")
             self._set_monthly_defaults()
 
+    def _calculate_monthly_ind_from_grouped(self):
+        """{mth_colrate7d_ind0/1}、占比与差分：与 m0_collection_rate_7d_30d_monthly_ind*.png / m0_ind1_ratio.png 口径一致。"""
+        from collections import defaultdict
+
+        gpath = self.data_dir / "m0_billing_grouped.json"
+        if not gpath.exists():
+            self._set_ind_split_defaults()
+            return
+        try:
+            with open(gpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            rows = data.get("rows", [])
+            fetch_str = data.get("metadata", {}).get("data_fetch_date")
+            if not rows or not fetch_str:
+                self._set_ind_split_defaults()
+                return
+            fetch_date = datetime.strptime(fetch_str, "%Y-%m-%d")
+            cutoff_ratio = (fetch_date - timedelta(days=1)).day
+            cutoff_7d = (fetch_date - timedelta(days=8)).day
+
+            monthly_ind = defaultdict(lambda: {"ind0": 0.0, "ind1": 0.0})
+            mth7 = {
+                "0": defaultdict(lambda: {"pd1": 0.0, "pd8": 0.0}),
+                "1": defaultdict(lambda: {"pd1": 0.0, "pd8": 0.0}),
+            }
+            for row in rows:
+                if not isinstance(row, list) or len(row) < 9:
+                    continue
+                bdate = datetime.strptime(row[0], "%Y-%m-%d")
+                mkey = row[0][:7]
+                ind = str(row[1])
+                if ind not in ("0", "1"):
+                    continue
+                if bdate.day <= cutoff_ratio:
+                    p1 = float(row[5]) or 0.0
+                    if ind == "0":
+                        monthly_ind[mkey]["ind0"] += p1
+                    else:
+                        monthly_ind[mkey]["ind1"] += p1
+                if bdate.day <= cutoff_7d:
+                    mth7[ind][mkey]["pd1"] += float(row[5]) or 0.0
+                    mth7[ind][mkey]["pd8"] += float(row[8]) or 0.0
+
+            def _last_two_7d(buckets):
+                mature = [
+                    (m, buckets[m])
+                    for m in sorted(buckets.keys())
+                    if buckets[m]["pd1"] > 0 and buckets[m]["pd8"] > 0
+                ]
+                if not mature:
+                    return 0.0, 0.0
+                cm, c = mature[-1]
+                cur = (c["pd1"] - c["pd8"]) / c["pd1"] * 100
+                if len(mature) >= 2:
+                    pm, p = mature[-2]
+                    prev = (p["pd1"] - p["pd8"]) / p["pd1"] * 100
+                    return cur, cur - prev
+                return cur, 0.0
+
+            c0, d0 = _last_two_7d(mth7["0"])
+            c1, d1 = _last_two_7d(mth7["1"])
+            self.params.update(
+                {
+                    "mth_colrate7d_ind0": f"{c0:.2f}%",
+                    "mth_colrate7d_ind0_dif": f"{d0:.2f}",
+                    "mth_colrate7d_ind1": f"{c1:.2f}%",
+                    "mth_colrate7d_ind1_dif": f"{d1:.2f}",
+                }
+            )
+
+            months_sorted = sorted(monthly_ind.keys())
+            ratios = []
+            for m in months_sorted:
+                d = monthly_ind[m]
+                tot = d["ind0"] + d["ind1"]
+                ratios.append((d["ind1"] / tot * 100) if tot > 0 else 0.0)
+            if ratios:
+                self.params["mth_ind1_ratio"] = f"{ratios[-1]:.2f}%"
+                if len(ratios) >= 2:
+                    self.params["mth1_ind1_ratio"] = f"{ratios[-2]:.2f}%"
+                    self.params["mth_ind1_ratio_dif"] = f"{(ratios[-1] - ratios[-2]):.2f}"
+                else:
+                    self.params["mth1_ind1_ratio"] = f"{ratios[-1]:.2f}%"
+                    self.params["mth_ind1_ratio_dif"] = "0.00"
+            else:
+                self.params.update(
+                    {
+                        "mth_ind1_ratio": "XX.XX%",
+                        "mth1_ind1_ratio": "XX.XX%",
+                        "mth_ind1_ratio_dif": "X.XX",
+                    }
+                )
+
+            print(
+                f"   [ind_mth] ind0 7d={self.params['mth_colrate7d_ind0']} "
+                f"dif={self.params['mth_colrate7d_ind0_dif']}, "
+                f"ind1 7d={self.params['mth_colrate7d_ind1']} "
+                f"dif={self.params['mth_colrate7d_ind1_dif']}, "
+                f"ind1占比={self.params.get('mth_ind1_ratio')}"
+            )
+        except Exception as e:
+            print(f"   [WARN] grouped 月参数失败: {e}")
+            self._set_ind_split_defaults()
+
+    def _set_ind_split_defaults(self):
+        self.params.update(
+            {
+                "mth_colrate7d_ind0": "XX.XX%",
+                "mth_colrate7d_ind0_dif": "X.XX",
+                "mth_colrate7d_ind1": "XX.XX%",
+                "mth_colrate7d_ind1_dif": "X.XX",
+                "mth_ind1_ratio": "XX.XX%",
+                "mth1_ind1_ratio": "XX.XX%",
+                "mth_ind1_ratio_dif": "X.XX",
+            }
+        )
+
     def _set_monthly_defaults(self):
         self.params.update({
             'mth_colrate7d': 'XX.XX%', 'mth_colrate7d_dif': 'X.XX',
             'mth_colrate30d': 'XX.XX%', 'mth_colrate30d_dif': 'X.XX',
+            "mth_colrate7d_ind0": "XX.XX%",
+            "mth_colrate7d_ind0_dif": "X.XX",
+            "mth_colrate7d_ind1": "XX.XX%",
+            "mth_colrate7d_ind1_dif": "X.XX",
+            "mth_ind1_ratio": "XX.XX%",
+            "mth1_ind1_ratio": "XX.XX%",
+            "mth_ind1_ratio_dif": "X.XX",
         })
 
     def _set_default_data_params(self):
@@ -716,9 +984,11 @@ class FeishuReportGenerator:
         print("[参数] 完成\n")
 
     def replace_params_in_text(self, text):
+        """无样式场景的扁平字符串替换（不插入上升/下降；飞书正文样式请用 _param_replace_text_runs）。"""
+        text = self._replace_bracket_shortcuts(text)
         for k, v in self.params.items():
             text = text.replace("{" + k + "}", str(v))
-        return text.replace("[DD1]", self.params.get('DD1', '')).replace("[DD]", self.params.get('DD', '')).replace("[mm]", self.params.get('mm', ''))
+        return text
 
     # ==================== 块处理 ====================
 
@@ -748,12 +1018,16 @@ class FeishuReportGenerator:
         for elem in elements:
             if "text_run" in elem:
                 tr = elem["text_run"]
-                result.append({
-                    "text_run": {
-                        "content": self.replace_params_in_text(tr.get("content", "")),
-                        "text_element_style": tr.get("text_element_style", {})
-                    }
-                })
+                base = tr.get("text_element_style") or {}
+                for r in self._param_replace_text_runs(tr.get("content", ""), base):
+                    result.append(
+                        {
+                            "text_run": {
+                                "content": r["content"],
+                                "text_element_style": r["text_element_style"],
+                            }
+                        }
+                    )
             else:
                 result.append(elem)
         return result
@@ -835,8 +1109,26 @@ class FeishuReportGenerator:
             else:
                 st.setdefault("align", 1)
 
-    def _is_png_placeholder(self, block):
+    def _ordered_png_placeholder_fnames(self, block):
+        """块内整段仅由若干 [*.png] 组成（中间可空白）时，按从左到右顺序返回文件名列表；否则 []."""
         text = self._get_block_text(block).strip()
+        matches = list(re.finditer(r'\[([^\]]+\.png)\]', text))
+        if not matches:
+            return []
+        last_end = 0
+        for m in matches:
+            if text[last_end:m.start()].strip():
+                return []
+            last_end = m.end()
+        if text[last_end:].strip():
+            return []
+        return [m.group(1) for m in matches]
+
+    def _is_png_placeholder(self, block):
+        """仅当块内恰好一个 [xxx.png] 且无其它字符时返回 Match（兼容旧逻辑）。"""
+        text = self._get_block_text(block).strip()
+        if len(self._ordered_png_placeholder_fnames(block)) != 1:
+            return None
         return re.match(r'^\[([^\]]+\.png)\]$', text)
 
     def _needs_skip(self, block):
@@ -861,6 +1153,7 @@ class FeishuReportGenerator:
         else:
             print("       ✓ 未检出 MD Callout 围栏（Skill 规则 8：NOTE/WARNING/…）")
         print("       ✓ 图片：[*.png] → 上传 + replace_image（对齐 Skill TL;DR #10 思路）")
+        print("       ✓ 文本：*dif →「上升/下降」+ 加粗着色（pp 跟进；rate_prin_od_dif/rate_cnt_od_dif：>=0 红、<0 绿；其余 dif：>=0 绿、<0 红）")
 
     # ==================== 主流程 ====================
 
@@ -954,7 +1247,8 @@ class FeishuReportGenerator:
         print(f"[OK] 索引完成\n")
 
         if not output_title:
-            output_title = f"催收周报（{datetime.now().strftime('%Y-%m-%d')}）"
+            now = datetime.now()
+            output_title = f"催收周报（{now.strftime('%Y-%m-%d')}）_{int(now.timestamp())}"
 
         # ---- 收集所有图片占位符（复制模式与克隆模式共用顺序） ----
         img_placeholder_map = {}
@@ -968,12 +1262,12 @@ class FeishuReportGenerator:
                 bid = b.get("block_id", "")
                 if bid in seen_img_blocks:
                     continue
-                png_m = self._is_png_placeholder(b)
-                if png_m:
+                fnames = self._ordered_png_placeholder_fnames(b)
+                if fnames:
                     seen_img_blocks.add(bid)
-                    fname = png_m.group(1)
-                    img_placeholder_order.append(fname)
-                    img_placeholder_map[fname] = None
+                    for fname in fnames:
+                        img_placeholder_order.append(fname)
+                        img_placeholder_map[fname] = None
                 for cid in b.get("children", []):
                     cb = self.blocks_by_id.get(cid)
                     if cb:
@@ -1035,15 +1329,16 @@ class FeishuReportGenerator:
             if skip_mode and ns != "end_skip":
                 return []
 
-            # --- 图片占位符 -> 空图片块（标记文件名） ---
-            png_m = self._is_png_placeholder(block)
-            if png_m:
-                img_path = Path(screenshots_dir) / png_m.group(1)
-                if img_path.exists():
-                    return [{"type": "block_img", "img_name": png_m.group(1),
-                             "data": {"block_type": 27, "image": {}}}]
-                else:
-                    return []
+            # --- 图片占位符 -> 空图片块（标记文件名）；同一块可写 [a.png][b.png] ---
+            root_fnames = self._ordered_png_placeholder_fnames(block)
+            if root_fnames:
+                items = []
+                for nm in root_fnames:
+                    img_path = Path(screenshots_dir) / nm
+                    if img_path.exists():
+                        items.append({"type": "block_img", "img_name": nm,
+                                      "data": {"block_type": 27, "image": {}}})
+                return items
 
             # --- grid 容器 ---
             if bt == 24:
@@ -1058,14 +1353,18 @@ class FeishuReportGenerator:
                         for scid in cb.get("children", []):
                             scb = self.blocks_by_id.get(scid)
                             if scb:
+                                col_fnames = self._ordered_png_placeholder_fnames(scb)
+                                if col_fnames:
+                                    for iname in col_fnames:
+                                        sc_img_path = Path(screenshots_dir) / iname
+                                        if sc_img_path.exists():
+                                            col_content.append({
+                                                "block_type": 27, "image": {},
+                                                "_img_name": iname,
+                                            })
+                                    continue
                                 sc = self._build_clone(scb)
                                 if sc is not None:
-                                    sc_png_m = self._is_png_placeholder(scb)
-                                    if sc_png_m:
-                                        sc_img_path = Path(screenshots_dir) / sc_png_m.group(1)
-                                        if sc_img_path.exists():
-                                            sc = {"block_type": 27, "image": {},
-                                                  "_img_name": sc_png_m.group(1)}
                                     col_content.append(sc)
                         columns_info.append({
                             "data": gc_clone,
@@ -1403,7 +1702,7 @@ def main():
         sys.exit(1)
     g = FeishuReportGenerator(aid, sec, str(_PROJECT_ROOT / "data"))
     r = g.generate_report(
-        "https://fintopia.feishu.cn/wiki/IahEwSFsLi7ZAmkvvMQcOg8pnwh",
+        "https://fintopia.feishu.cn/wiki/WHruwVACAi8nWPkXYgQcrLhHnFb",
         str(_PROJECT_ROOT / "screenshots"),
     )
     if r:

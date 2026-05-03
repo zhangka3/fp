@@ -30,6 +30,9 @@ for k in [
     'wk_colrate15d', 'wk_colrate15d_dif',
     'mth_colrate7d', 'mth_colrate7d_dif',
     'mth_colrate30d', 'mth_colrate30d_dif',
+    'mth_colrate7d_ind0', 'mth_colrate7d_ind0_dif',
+    'mth_colrate7d_ind1', 'mth_colrate7d_ind1_dif',
+    'mth_ind1_ratio', 'mth1_ind1_ratio', 'mth_ind1_ratio_dif',
 ]:
     v = g.params.get(k, '<MISSING>')
     print(f"  {{{k}}} = {v}")

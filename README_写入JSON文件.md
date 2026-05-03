@@ -1,5 +1,7 @@
 # 写入所有JSON文件 - 使用说明
 
+> **2026-05 提示**：本文为早期「按固定 Query ID 手工写入」备忘，**表内 Query ID 与条数可能已过期**。当前周报请以根目录 **`.claude/skills/wkrpt.md`（wkrpt Skill）** 为准，使用 **`python code/python/01_execute_sql/run_all.py`** 将 **`code/sql/*.sql`（现 15 条）** 经 MCP 落盘到 **`data/*.json`**。
+
 ## 文件说明
 
 共需要生成 **8个JSON文件**:
