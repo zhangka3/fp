@@ -27,7 +27,7 @@ from feishu_creds import FEISHU_CREDENTIALS_HELP, load_feishu_app_credentials
 # ==================== 配置 ====================
 # 凭证：项目根 feishu_app.json（见 feishu_app.example.json），或环境变量 FEISHU_APP_ID / FEISHU_APP_SECRET
 APP_ID, APP_SECRET = load_feishu_app_credentials(PROJECT_ROOT)
-WIKI_URL = 'https://fintopia.feishu.cn/wiki/IahEwSFsLi7ZAmkvvMQcOg8pnwh'
+WIKI_URL = 'https://fintopia.feishu.cn/wiki/WHruwVACAi8nWPkXYgQcrLhHnFb'
 SCREENSHOTS_DIR = PROJECT_ROOT / "screenshots"
 OUTPUT_FILE = PROJECT_ROOT / "template_analysis.json"
 

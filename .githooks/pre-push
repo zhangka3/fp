@@ -1,0 +1,20 @@
+#!/bin/sh
+# Push 前对工作区执行 git add -A。.gitignore 已排除 data、screenshots、feishu_app.json 等，不会被加入。
+# 若相对 HEAD 仍有未提交变更，阻断本次 push（须先 commit，否则无法推送）。
+
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+git add -A
+
+if git diff-index --quiet HEAD --; then
+	exit 0
+fi
+
+echo ""
+echo "[pre-push] 已执行: git add -A（密钥与 data/screenshots 等仍由 .gitignore 排除）"
+echo "[pre-push] 尚有未提交的变更，请先 git commit 后再 push："
+echo ""
+git status -sb
+exit 1

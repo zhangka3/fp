@@ -21,6 +21,6 @@ SELECT
     sum(mtd_daily_assign_amt) as mtd_daily_assign_amt
 FROM tmp_export.area_mtd01_ins
 WHERE 1=1
-    AND mth IN (date_format(date_sub(current_date(),30), 'yyyyMM'), date_format(date_sub(current_date(),1), 'yyyyMM'))
+    AND mth IN (date_format(date_sub(current_date(),50), 'yyyyMM'), date_format(date_sub(current_date(),1), 'yyyyMM'))
 group by mth, day(date), case_type, collector_ins
 ORDER BY mth, day(date), case_type, collector_ins

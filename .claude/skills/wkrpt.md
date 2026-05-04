@@ -340,7 +340,8 @@ python screen_call_type_weekly.py
 ## Git 同步到远端（GitHub / Gitee）
 
 - **不要**提交：`data/**/*.json`、`screenshots/**`、密钥、`feishu_app.json` 等（以根目录 `.gitignore` 为准）；勿 `git add -f` 强行纳入。
-- **任何 `git push` 前**须请用户选择：**仅 origin（GitHub）/ 仅 gitee / 两者依次 push**。
+- **推送前自动 `git add -A`（可选）**：仓库提供 **`.githooks/pre-push`**，在项目根**一次性**执行 **`powershell -ExecutionPolicy Bypass -File scripts/install_git_hooks.ps1`**（或手动 `git config core.hooksPath .githooks`）。之后每次 **`git push`** 会先 **`git add -A`**（仍遵守 `.gitignore`，不会加入 data/screenshots/密钥文件）；若此时相对 **`HEAD` 仍有未提交变更，hook 会阻断 push**，提示你先 **`git commit`**——仅有 add 无法把新文件推上远端。
+- **任何 `git push` 前**（人机协作场景）仍建议确认：**仅 origin（GitHub）/ 仅 gitee / 两者依次 push**。
 - 远程名常见：`origin` → GitHub，`gitee` → Gitee；`git remote -v` 查看。分支名以本地为准（多为 `main`）。
 
 ---

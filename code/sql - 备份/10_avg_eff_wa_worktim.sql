@@ -1,5 +1,5 @@
 -- Average Effective Working Time DATA
--- Query ID: 954000
+-- Query ID: 954002
 -- Purpose: 查询各模块下相同可比日的人均有效工作时长，以及和上月同样可比日的差距
 -- Time Range: 最近3个月 (202602 ~ 202604)
 -- Expected Rows: >200 行
@@ -15,7 +15,7 @@
 
 with base as (
 select area_type,area_ranking_type,p_month,scope_x,
-count(distinct collector_name) as num_col,AVG(wa_minutes+calling_minutes) as avg_eff_worktime
+count(distinct collector_name) as num_col,AVG(wa_minutes) as avg_eff_worktime
 from (
 select 
 *,

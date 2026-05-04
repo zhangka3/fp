@@ -345,6 +345,76 @@ def validate_avg_eff_worktim(filename, desc="人均工作时长"):
     return True
 
 
+def validate_conect_rate(filename, desc="拨打模式周度接通率"):
+    """15_conect_rate → conect_rate.json：周 × call_type 粒度。"""
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在")
+        return False
+    header = data["header"]
+    rows = data["rows"]
+    idx = {name: i for i, name in enumerate(header)}
+    need = ("year", "week_num", "call_type", "connect_rate", "call_cnt")
+    missing = [k for k in need if k not in idx]
+    if missing:
+        print(f"  ✗ 缺少字段: {missing}")
+        return False
+    print(f"  行数: {len(rows)}")
+    if not rows:
+        print("  ✗ 无数据")
+        return False
+    print("  ✓ 关键列存在且有行")
+    return True
+
+
+def validate_full_call(filename, desc="全量外呼生产力"):
+    """14_full_call → full_call.json：周粒度 + 复合 case_type；含环比 lag/dif（比率列允许 NULL）。"""
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在"); return False
+    header = data['header']
+    rows = data['rows']
+    idx = {name: i for i, name in enumerate(header)}
+    need = (
+        'year', 'weeknum', 'case_type', 'call_cnt', 'self_full_rate_dif',
+        'avg_dur_per_case',
+    )
+    missing = [k for k in need if k not in idx]
+    if missing:
+        print(f"  ✗ 缺少字段: {missing}"); return False
+    print(f"  行数: {len(rows)}")
+    if len(rows) < 20:
+        print(f"  ⚠ 行数偏少（<20），请确认时间窗与过滤条件")
+    null_call = sum(1 for r in rows if _is_null(r[idx['call_cnt']]))
+    if null_call == len(rows):
+        print("  ✗ call_cnt 全为空"); return False
+    print("  ✓ 关键列存在且 call_cnt 非全空")
+    return True
+
+
+def validate_case_stock(filename, desc="人均库存·九宫格"):
+    """13_case_stock → case_stock.json：九宫格粒度字段存在且有行。"""
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在"); return False
+    header = data['header']
+    rows = data['rows']
+    idx = {name: i for i, name in enumerate(header)}
+    need = ('mth', 'case_group_type', 'col_type')
+    missing = [k for k in need if k not in idx]
+    if missing:
+        print(f"  ✗ 缺少字段: {missing}"); return False
+    print(f"  行数: {len(rows)}")
+    if not rows:
+        print("  ✗ 无数据"); return False
+    groups = {(r[idx['mth']], r[idx['case_group_type']], r[idx['col_type']]) for r in rows}
+    print(f"  ✓ 粒度组合数: {len(groups)}")
+    return True
+
+
 # ================== 注册表 ==================
 # key = JSON 文件名（与 run_all.py 输出一致）
 # value = (验证函数, 描述)
@@ -362,6 +432,9 @@ VALIDATORS = {
     'avg_eff_wa_worktim.json':       (validate_avg_eff_worktim, '人均WA工时'),
     'M2_class_all.json':             (validate_m2_class_all,    'M2·ALL'),
     'M6_class_all.json':             (validate_m6_class_all,    'M2-M6账龄31-180天'),
+    'case_stock.json':               (validate_case_stock,      '人均库存·九宫格'),
+    'full_call.json':                (validate_full_call,       '全量外呼生产力'),
+    'conect_rate.json':              (validate_conect_rate,     '拨打模式周度接通率'),
 }
 
 

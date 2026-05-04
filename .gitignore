@@ -26,8 +26,13 @@ Desktop.ini
 # Windows 保留名误生成（勿提交）
 **/nul.png
 
-# Cursor 本地状态（可选：若希望同步规则可删掉下一行）
-.cursor/
+# Cursor：忽略本地缓存等；但 **跟踪** `.cursor/skills/wkrpt/SKILL.md`（与 `.claude/skills/wkrpt.md` 同文，便于 Gitee 协作者）
+.cursor/*
+!.cursor/skills/
+.cursor/skills/*
+!.cursor/skills/wkrpt/
+.cursor/skills/wkrpt/*
+!.cursor/skills/wkrpt/SKILL.md
 
 # SQL 导出 / 运行产物（勿提交，避免敏感数据与仓库体积）
 data/**/*.json

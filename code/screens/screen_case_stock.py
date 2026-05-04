@@ -378,8 +378,9 @@ def main() -> int:
     cmap = chart_theme.SERIES_COLORS
     colors = {g: (i, cmap[i % len(cmap)]) for i, g in enumerate(all_groups)}
 
-    fig_w = 19.0
-    fig_h = 15.0
+    # 与 `screen_full_call.py` 中 full_call 系列图一致，便于飞书等场景下尺寸对齐
+    fig_w = 24.0
+    fig_h = 16.0
     fig = plt.figure(figsize=(fig_w, fig_h))
 
     # 三块垂直区域；块与块之间约 ROW_GAP_CM
@@ -484,7 +485,7 @@ def main() -> int:
         )
 
     out = OUT_DIR / "case_stock_9grid.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight", pad_inches=0.25)
+    chart_theme.save_figure(fig, str(out), dpi=150)
     plt.close(fig)
     print(f"已保存: {out}")
     return 0
