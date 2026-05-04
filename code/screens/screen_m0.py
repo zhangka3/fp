@@ -914,15 +914,6 @@ def generate_ind_collection_rate_chart(grouped_rows, data_fetch_date):
         print(f'  OK: {output_path.name}')
 
 
-def cleanup_old_charts(pattern):
-    """清理旧图表文件"""
-    old_files = list(OUTPUT_DIR.glob(pattern))
-    if old_files:
-        for f in old_files:
-            f.unlink()
-        print(f"[清除旧图表] {len(old_files)} 张\n")
-
-
 def main():
     """主函数：生成所有M0图表"""
     print("=" * 60)
@@ -930,9 +921,6 @@ def main():
     print(f"数据目录: {DATA_DIR}")
     print(f"保存位置: {OUTPUT_DIR}")
     print("=" * 60)
-
-    # 清除旧的M0图表
-    cleanup_old_charts('m0_*.png')
 
     # 加载数据
     print("\n加载数据:")

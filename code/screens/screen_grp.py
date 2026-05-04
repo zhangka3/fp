@@ -506,15 +506,6 @@ def _grp_layout_footer(ax, ranking_text: str) -> None:
     fig.subplots_adjust(left=0.09, right=0.90, top=0.90, bottom=bottom)
 
 
-def cleanup_old_charts(pattern):
-    """清理旧图表文件"""
-    old_files = list(OUTPUT_DIR.glob(pattern))
-    if old_files:
-        for f in old_files:
-            f.unlink()
-        print(f"[清除旧图表] {len(old_files)} 张")
-
-
 def main():
     """主函数：生成所有GRP图表"""
     print("=" * 60)
@@ -522,9 +513,6 @@ def main():
     print(f"数据目录: {DATA_DIR}")
     print(f"保存位置: {OUTPUT_DIR}")
     print("=" * 60)
-
-    # 清除旧的GRP图表
-    cleanup_old_charts('grp_*.png')
 
     # 加载数据
     print("\n加载数据:")

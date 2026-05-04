@@ -137,7 +137,8 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 
 - **编排脚本**：`code/screens/run_all_screens.py`  
   - 自动发现 `code/screens/screen_*.py`，子进程独立运行，超时 300s/脚本。  
-  - `python code/screens/run_all_screens.py --list` 列出脚本；可传过滤参数只跑其一（见脚本 `--help`）。
+  - `python code/screens/run_all_screens.py --list` 列出脚本；可传过滤参数只跑其一（见脚本 `--help`）。  
+  - **清理策略**：**全量**（无过滤且未带 `--no-clean`）时，在跑第一个脚本前 **一次性删除 `screenshots/*.png`**；各 `screen_*.py` **不再单独 cleanup**，后续仅覆盖同名文件。**部分脚本**（有过滤）或 **`--no-clean`**：跳过全量删除，便于只更新部分图（单独直接运行某个 `screen_*.py` 时同理，不自动清空目录）。
 - **输出目录**：项目根 `screenshots/`（各 `screen_*.py` 内定义文件名）。
 - **图表数量**：以 `run_all_screens.py` 当次汇总为准（人均模块最多 **3** 张 PNG，取决于 `data/` 中是否存在对应 JSON）。含 **M2 / M2–M6**（`screen_m2_m6.py`，4 张）、**`screen_case_stock.py`（1 张九宫格）**、**`screen_full_call.py`（4 张）**、**`screen_call_type_weekly.py`（1 张）** 等后，`screenshots/` 常见合计约 **40～55** 张；**飞书 wiki 当前模板**插图占位约 **38** 处（以步骤 **5.5** 的 `template_analysis.json` 为准）。
 

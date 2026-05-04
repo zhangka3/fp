@@ -6,6 +6,7 @@ r"""
 - 每个脚本用 subprocess 独立进程跑，互不影响（一个挂了不影响其他）
 - 支持过滤：`python run_all_screens.py screen_grp` 只跑指定脚本
 - 输出统一到 `screenshots/` 目录（由各脚本自己控制）
+- **全量跑图**（不带过滤、且未加 `--no-clean`）时：在第一个脚本运行前 **一次性删除 `screenshots/*.png`**；之后各脚本只覆盖写入，**不再各自 cleanup**。**部分脚本**（带过滤）或 **`--no-clean`**：不做全量删除，便于只更新部分图。
 
 新增图表流程：
 1. 在项目根的 `code/screens/` 写 `screen_xxx.py`
@@ -26,6 +27,15 @@ if sys.platform == 'win32':
 
 SCRIPT_DIR = Path(__file__).parent
 SCREENSHOTS_DIR = SCRIPT_DIR.parent.parent / 'screenshots'
+
+
+def cleanup_all_png_in_screenshots() -> int:
+    """删除 screenshots 目录下全部 .png，返回删除文件数。"""
+    SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    paths = list(SCREENSHOTS_DIR.glob('*.png'))
+    for p in paths:
+        p.unlink()
+    return len(paths)
 
 
 def discover_screen_scripts(filter_stem: str | None = None) -> list[Path]:
@@ -75,6 +85,8 @@ def main():
     parser.add_argument('filter', nargs='?', default=None,
                         help='只跑指定脚本（如 screen_grp 或 grp）')
     parser.add_argument('--list', action='store_true', help='只列出待执行脚本')
+    parser.add_argument('--no-clean', action='store_true',
+                        help='全量跑图时也不删除已有 PNG（仅覆盖本次各脚本写出的文件名）')
     args = parser.parse_args()
 
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -88,7 +100,16 @@ def main():
     if args.list:
         return 0
 
-    print('\n输出目录:', SCREENSHOTS_DIR)
+    if args.filter is None and not args.no_clean:
+        n_rm = cleanup_all_png_in_screenshots()
+        print(f'[清除旧图表] 全量清理 screenshots/*.png：已删除 {n_rm} 张')
+        print('（各 screen_*.py 不再单独 cleanup，仅覆盖写入）\n')
+    elif args.filter is not None:
+        print('[提示] 部分脚本模式：跳过全量清理，仅覆盖本次脚本生成的 PNG\n')
+    else:
+        print('[提示] 已指定 --no-clean：跳过全量清理\n')
+
+    print('输出目录:', SCREENSHOTS_DIR)
     print('开始执行...\n')
 
     t_start = time.time()

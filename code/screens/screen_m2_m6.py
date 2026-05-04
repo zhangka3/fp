@@ -282,19 +282,12 @@ def _run_one(json_stem: str, combo_title: str, table_title: str, combo_file: str
     _plot_table(chart_data, table_title, table_file)
 
 
-def cleanup_old_charts() -> None:
-    for pat in ("recovery_rate_M2_*.png", "recovery_rate_M6_*.png"):
-        for f in OUTPUT_DIR.glob(pat):
-            f.unlink()
-
-
 def main() -> None:
     print("=" * 60)
     print("M2 / M2-M6 回款率图（S 类风格：组合图 + 表）")
     print(f"数据: {DATA_DIR}")
     print(f"输出: {OUTPUT_DIR}")
     print("=" * 60)
-    cleanup_old_charts()
 
     _run_one(
         "M2_class_all",

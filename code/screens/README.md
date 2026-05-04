@@ -13,7 +13,7 @@ python code/screens/run_all_screens.py screen_grp # 只跑匹配项（见脚本 
 
 | 脚本 | 主要数据源（`data/`） | 产出示例（`screenshots/`） |
 |------|------------------------|----------------------------|
-| `screen_s_class.py` | `s_class_all.json`、`s_class_new.json`、`s_class_mtd.json` | `recovery_rate_*.png`、组合图、`recovery_rate_S_table_*.png`（约 15 张量级） |
+| `screen_s_class.py` | `s_class_all.json`、`s_class_new.json`、`s_class_mtd.json` | **`recovery_rate_S*.png`**（单 case / 组合 / 表图；清理时不用 `recovery_rate_*.png`，避免误删 M2/M6） |
 | `screen_m1.py` | `m1_assignment_repayment.json` | `assignment_repayment_*.png`、`assignment_repayment_table_*.png`（柱线 + 表图） |
 | `screen_m0.py` | **`m0_billing.json`**、**`m0_billing_grouped.json`**（与 `run_all` 命名一致） | `m0_*.png`（约 8 张） |
 | `screen_grp.py` | **`grp_collector.json`** | `grp_*.png`（按数据中 `case_type`，约 12 张） |
@@ -88,6 +88,10 @@ python screen_case_stock.py
 ## 批处理（可选）
 
 同目录提供 **`run_all.bat`** / **`run_all.sh`**、以及 **`run_all_screens.py`**（动态发现，新增 `screen_*.py` 会自动纳入）。**首选 `run_all_screens.py`**。
+
+- **全量**（不带参数）：开始前 **一次性删除 `screenshots/*.png`**，各 `screen_*.py` **不再各自 cleanup**，只覆盖写入。  
+- **部分脚本**（如 `run_all_screens.py screen_grp`）：**不**做全量删除，只覆盖本次脚本生成的文件。  
+- **`--no-clean`**：全量跑图时也跳过删除（保留目录里已有 PNG，仅覆盖同名输出）。
 
 ## 更多文档
 

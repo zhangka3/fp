@@ -527,15 +527,6 @@ def generate_table_chart(data, assign_type):
     print(f"  OK: {filename.name}")
 
 
-def cleanup_old_charts(pattern):
-    """清理旧图表文件"""
-    old_files = list(OUTPUT_DIR.glob(pattern))
-    if old_files:
-        for f in old_files:
-            f.unlink()
-        print(f"[清除旧图表] {len(old_files)} 张\n")
-
-
 def main():
     """主函数：生成所有S类图表"""
     types = ['all', 'new', 'mtd']
@@ -547,9 +538,6 @@ def main():
     print(f"数据目录: {DATA_DIR}")
     print(f"保存位置: {OUTPUT_DIR}")
     print("=" * 60)
-
-    # 清除旧的S类图表
-    cleanup_old_charts('recovery_rate_*.png')
 
     total_count = 0
 
