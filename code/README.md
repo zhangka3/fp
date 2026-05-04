@@ -27,4 +27,5 @@
 2026-05-03 — 新增本索引；与 `wkrpt` Skill、`sql`/`screens` README 同步维护。  
 2026-05-03 — `sql/README` 补充 **`14_full_call` / `full_call.json`** 周粒度、`lag` 环比与维护说明。  
 2026-05-04 — 补充 **`15_conect_rate` / `conect_rate.json`** 与 **`screen_call_type_weekly.py`**。  
-2026-05-04 — 补充飞书 **`generate_feishu_report`** 的 `*dif` 着色与 **`m0_billing_grouped`** 派生参数说明。
+2026-05-04 — 补充飞书 **`generate_feishu_report`** 的 `*dif` 着色与 **`m0_billing_grouped`** 派生参数说明。  
+2026-05-06 — **`sql`**：新增 **`16_precall_task`**；**`screens`**：**`screen_precall_task.py`**；**`validate_data`**：**`precall_task.json`**；飞书模板插图 **`precall_task_trends.png`**（详见 **wkrpt** / 子目录 README）。

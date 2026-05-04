@@ -22,6 +22,7 @@ python code/screens/run_all_screens.py screen_grp # 只跑匹配项（见脚本 
 | **`screen_case_stock.py`** | **`case_stock.json`**（需含 `case_group_type`、`col_type` 等字段） | **`case_stock_9grid.png`**（3×3 柱线 + 每列下方折线数值表；详见下文） |
 | **`screen_full_call.py`** | **`full_call.json`**（`14_full_call.sql`） | **`full_call_full_rates.png`**（满频）、**`full_call_avg_calls_per_case.png`**（案均拨打）、**`full_call_avg_dur_per_case.png`**（案均有效通时）、**`full_call_eff_rates.png`**（有效接通率）；各图均为本人/非本人/整体三带；**最近 5 周**，按 `case_type` 排序（见下文） |
 | **`screen_call_type_weekly.py`** | **`conect_rate.json`**（`15_conect_rate.sql`） | **`call_type_weekly_connect.png`**（周 × `call_type`：上行接通率折线、下行拨打量堆叠柱；**24×16 英寸** 与 `full_call_eff_rates.png` 同高） |
+| **`screen_precall_task.py`** | **`precall_task.json`**（`16_precall_task.sql`） | **`precall_task_trends.png`**（预测试任务：**4 行指标 × 列＝手工 stage + 1 cm 空白 + 全时 stage**） |
 
 视觉主题见同目录 **`chart_theme.py`**（各脚本 `import chart_theme` 后 `apply_chart_theme()`）。
 
@@ -60,6 +61,22 @@ python screen_full_call.py
 ```powershell
 cd code/screens
 python screen_call_type_weekly.py
+```
+
+## `screen_precall_task.py`（预测试任务 · 手工/全时 × stage）
+
+- **依赖**：`data/precall_task.json`（`code/sql/16_precall_task.sql` → `run_all.py`）。
+- **输出**：`screenshots/precall_task_trends.png`（画布宽度随列数 **`10 + 2.35 × n_col`** 英寸封顶 **44**，高度约 **11～22** 英寸、`dpi=150`）。
+- **版式**：**行＝四指标**（接通率 / 呼损率 / 有效时间利用率 / 人工接通中的语音信箱比例）；**列＝「手工」下各 stage + 中间固定 1 cm 空白 + 「全时」下各 stage**（figure 坐标换算，与 **`GAP_CM`** 常量一致）。
+- **stage 列顺序**（每个 type 内仅排数据中存在的项）：**RA → RB → RC → RD → S2 → S3 → M2 → M4 → M5**；其余代号排在末尾并按名称排序。
+- **折线**：**仅连接源数据中存在的日历点**，不向序列插入日期、不插值；缺日无点，相邻有值日直线相连（跨缺口不代表中间日有观测）。线宽偏细，`chart_theme.polish_ax_lines`；**无图例**；横轴**无刻度**；最左列 **ylabel** 为指标中文名。
+- **列标题**：**「手工」「全时」**大号加粗居中于各自列组上方；其下 **每个 stage** 列顶小字加粗。
+- **竖向分隔**：相邻 **stage** 列之间 **细**线（`STAGE_DIVIDER_LW`）；**手工块与全时块**（含 1 cm 空隙两侧边界）**粗**线（`PRE_TYPE_DIVIDER_LW`）。
+- **标注**：按既有规则（最近点、每 7 天、窗口内最高/最低），见脚本内 `_annotation_days`。
+
+```powershell
+cd code/screens
+python screen_precall_task.py
 ```
 
 ## `screen_case_stock.py`（人均库存看板）
@@ -106,4 +123,5 @@ python screen_case_stock.py
 2026-05-04 — 增加 **`full_call_avg_dur_per_case.png`**（案均有效通时，秒/案）；生成顺序为满频→案均拨打→案均通时→接通率。  
 2026-05-04 — 新增 **`screen_call_type_weekly.py`** → **`call_type_weekly_connect.png`**（`15_conect_rate` / `conect_rate.json`）。  
 2026-05-03 — **`case_type` 横轴排序** 改为按末尾档位解析 + **M 档位数值序**（M4+ 在 M5+ 前）；三张图生成顺序为 **满频→案均→接通**。  
-2026-05-04 — 飞书：`generate_feishu_report` 对正文 **`{…dif}`** 做「上升/下降」加粗着色（**`rate_prin_od_dif` / `rate_cnt_od_dif` 颜色与催回类相反**）；同一段可连续 **`[*.png][*.png]`** 占位；详见根目录 **wkrpt** Skill。
+2026-05-04 — 飞书：`generate_feishu_report` 对正文 **`{…dif}`** 做「上升/下降」加粗着色（**`rate_prin_od_dif` / `rate_cnt_od_dif` 颜色与催回类相反**）；同一段可连续 **`[*.png][*.png]`** 占位；详见根目录 **wkrpt** Skill。  
+2026-05-06 — 新增 **`screen_precall_task.py`** → **`precall_task_trends.png`**（`16_precall_task` / `precall_task.json`）；版式、分隔线与 stage 顺序见本节。

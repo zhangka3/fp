@@ -18,6 +18,39 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _m0_monthly_cutoff_context(fetch_date: datetime) -> dict:
+    """与 screen_m0.build_monthly_cutoff_context 一致。环境变量 M0_SP_NO_FALLBACK=1 强制始终 (fetch-1).day。"""
+    forced = os.environ.get('M0_SP_NO_FALLBACK', '').strip().lower() in ('1', 'true', 'yes', 'on')
+    fd = fetch_date.date()
+    fetch_month_key = fd.strftime('%Y-%m')
+    first_of_month = fd.replace(day=1)
+    prev_month_last = first_of_month - timedelta(days=1)
+    mature_limit_7d = (fetch_date - timedelta(days=8)).date()
+    if forced:
+        return {
+            'line_fallback': False,
+            'cutoff_day': (fetch_date - timedelta(days=1)).day,
+            'fetch_month_key': fetch_month_key,
+            'notice': None,
+            'forced_normal': True,
+        }
+    line_fallback = not (first_of_month <= mature_limit_7d)
+    if line_fallback:
+        anchor = min(prev_month_last, mature_limit_7d)
+        cutoff_day = anchor.day
+        notice = '因为本月没有7d成熟日，所以按照上月最后一个可以观察的截止日来做图'
+    else:
+        cutoff_day = (fetch_date - timedelta(days=1)).day
+        notice = None
+    return {
+        'line_fallback': line_fallback,
+        'cutoff_day': cutoff_day,
+        'fetch_month_key': fetch_month_key,
+        'notice': notice,
+        'forced_normal': False,
+    }
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 from feishu_creds import FEISHU_CREDENTIALS_HELP, load_feishu_app_credentials
@@ -693,7 +726,7 @@ class FeishuReportGenerator:
         与 [m0_collection_rate_weekly.png] 完全对齐：
           - 数据源：m0_billing.json（不是 grouped）
           - 周分组：周日为周起始（与 screen_m0.aggregate_weekly_data 一致）
-          - 成熟度：week_end + N 天 < data_fetch_date
+          - 成熟度：week_end + N 天 <= data_fetch_date（与月度 billing<=fetch-N 边界一致）
           - 取最新成熟周与上一成熟周作差
         m0_billing.json header 索引: pd1=4, pd8=8, pd16=12
         """
@@ -729,14 +762,14 @@ class FeishuReportGenerator:
 
             def _last_two(buckets, key_pd_minus, mature_days):
                 """与 screen_m0.generate_weekly_collection_rate 一致：
-                week_end = week_start + 6, 要求 week_end + mature_days < fetch_date 才成熟。
+                week_end = week_start + 6，成熟条件 week_end + mature_days <= fetch_date。
                 只保留 pd1>0 且成熟的周，取最新与上一作差。"""
                 mature = []
                 for wk in sorted_wks:
                     week_start = datetime.strptime(wk, '%Y-%m-%d')
                     week_end = week_start + timedelta(days=6)
                     bucket = buckets[wk]
-                    if bucket['pd1'] > 0 and (week_end + timedelta(days=mature_days)) < data_fetch_date:
+                    if bucket['pd1'] > 0 and (week_end + timedelta(days=mature_days)) <= data_fetch_date:
                         mature.append((wk, bucket))
                 if not mature:
                     return 0.0, 0.0, None, None
@@ -773,10 +806,9 @@ class FeishuReportGenerator:
         """计算 {mth_colrate7d}, {mth_colrate7d_dif}, {mth_colrate30d}, {mth_colrate30d_dif}
 
         与 [m0_collection_rate_7d_30d_monthly.png] 图中最新月份的最后一个点对齐。
-        口径（与 screen_m0.aggregate_monthly_data 一致）：
-          - 同期对比：每月只取 day <= (fetch_date - mature_days).day 的记录
-          - mature_days=8  → 7d 催回率：col = (pd1 - pd8)/pd1 * 100
-          - mature_days=31 → 30d 催回率：col = (pd1 - pd31)/pd1 * 100
+        口径（与 screen_m0 催回月图一致）：
+          - 每月 day <= ctx.cutoff_day（与柱一致；月初无7d成熟且未设 M0_SP_NO_FALLBACK 时回退并跳过当月桶）
+          - 7d：再要求账单日期 <= fetch_date - 8；30d：<= fetch_date - 31
         m0_billing.json header: [billing_date, billing_instalment_cnt,
             c_billing_instalment_cnt_pastdue_1d, billing_principal,
             c_billing_principal_pastdue_1d, ..., c_billing_principal_pastdue_8d (idx 8),
@@ -794,9 +826,15 @@ class FeishuReportGenerator:
             if not rows or not fetch_str:
                 self._set_monthly_defaults(); return
             fetch_date = datetime.strptime(fetch_str, '%Y-%m-%d')
+            ctx = _m0_monthly_cutoff_context(fetch_date)
+            if ctx.get('forced_normal'):
+                print("   [提示] 已启用 M0_SP_NO_FALLBACK：月催回率占位符按 (fetch−1).day。")
+            if ctx['notice']:
+                print(f"   [提示] {ctx['notice']}")
 
-            cutoff_7d = (fetch_date - timedelta(days=8)).day
-            cutoff_30d = (fetch_date - timedelta(days=31)).day
+            cutoff_line = ctx['cutoff_day']
+            max_billing_7d = (fetch_date - timedelta(days=8)).date()
+            max_billing_30d = (fetch_date - timedelta(days=31)).date()
 
             mth_7d = defaultdict(lambda: {'pd1': 0.0, 'pd8': 0.0})
             mth_30d = defaultdict(lambda: {'pd1': 0.0, 'pd31': 0.0})
@@ -805,10 +843,13 @@ class FeishuReportGenerator:
                     continue
                 bdate = datetime.strptime(row[0], '%Y-%m-%d')
                 mkey = row[0][:7]
-                if bdate.day <= cutoff_7d:
+                bd = bdate.date()
+                if ctx['line_fallback'] and mkey == ctx['fetch_month_key']:
+                    continue
+                if bdate.day <= cutoff_line and bd <= max_billing_7d:
                     mth_7d[mkey]['pd1'] += float(row[4]) or 0
                     mth_7d[mkey]['pd8'] += float(row[8]) or 0
-                if bdate.day <= cutoff_30d:
+                if bdate.day <= cutoff_line and bd <= max_billing_30d:
                     mth_30d[mkey]['pd1'] += float(row[4]) or 0
                     mth_30d[mkey]['pd31'] += float(row[13]) or 0
 
@@ -859,8 +900,10 @@ class FeishuReportGenerator:
                 self._set_ind_split_defaults()
                 return
             fetch_date = datetime.strptime(fetch_str, "%Y-%m-%d")
-            cutoff_ratio = (fetch_date - timedelta(days=1)).day
-            cutoff_7d = (fetch_date - timedelta(days=8)).day
+            ctx = _m0_monthly_cutoff_context(fetch_date)
+            cutoff_line = ctx['cutoff_day']
+            max_b1 = (fetch_date - timedelta(days=1)).date()
+            max_billing_7d = (fetch_date - timedelta(days=8)).date()
 
             monthly_ind = defaultdict(lambda: {"ind0": 0.0, "ind1": 0.0})
             mth7 = {
@@ -875,13 +918,16 @@ class FeishuReportGenerator:
                 ind = str(row[1])
                 if ind not in ("0", "1"):
                     continue
-                if bdate.day <= cutoff_ratio:
+                bd = bdate.date()
+                if bdate.day <= cutoff_line and bd <= max_b1:
                     p1 = float(row[5]) or 0.0
                     if ind == "0":
                         monthly_ind[mkey]["ind0"] += p1
                     else:
                         monthly_ind[mkey]["ind1"] += p1
-                if bdate.day <= cutoff_7d:
+                if ctx["line_fallback"] and mkey == ctx["fetch_month_key"]:
+                    continue
+                if bdate.day <= cutoff_line and bd <= max_billing_7d:
                     mth7[ind][mkey]["pd1"] += float(row[5]) or 0.0
                     mth7[ind][mkey]["pd8"] += float(row[8]) or 0.0
 

@@ -10,6 +10,7 @@
 3. **不要在这里硬编码业务字段索引**，所有索引按 `header` 真实顺序解析。
 """
 import json
+import re
 import sys
 import io
 from pathlib import Path
@@ -415,6 +416,99 @@ def validate_case_stock(filename, desc="人均库存·九宫格"):
     return True
 
 
+def validate_precall_task(filename, desc="预测试任务·日×类型×账龄"):
+    """16_precall_task → precall_task.json：MM-dd × pre_type × stage；比率列合理范围。"""
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在")
+        return False
+    header = data["header"]
+    rows = data["rows"]
+    named = {
+        "pre_type",
+        "stage",
+        "conn_loss_ratio",
+        "conn_ratio",
+        "eff_duration_ratio",
+        "vm_ratio_agent_conn",
+    }
+    idx = {name: i for i, name in enumerate(header)}
+    missing = [k for k in named if k not in idx]
+    if missing:
+        print(f"  ✗ 缺少字段: {missing}")
+        return False
+    extra_idx = [i for i, h in enumerate(header) if h not in named]
+    if len(extra_idx) != 1:
+        print(f"  ✗ 预期除已知列外恰有 1 列日期(MM-dd)，实际额外列索引: {extra_idx}")
+        return False
+    i_mmdd = extra_idx[0]
+    print(f"  行数: {len(rows)}")
+    if not rows:
+        print("  ✗ 无数据")
+        return False
+
+    mmdd_re = re.compile(r"^\d{2}-\d{2}$")
+    allowed_pre = {"全时", "手工"}
+    keys_seen = set()
+    bad_mmdd = []
+    bad_pre = []
+    bad_stage = []
+    bad_ratio = []
+    for row in rows:
+        mmdd = row[i_mmdd]
+        if not mmdd_re.match(str(mmdd).strip()):
+            bad_mmdd.append(mmdd)
+        pt = row[idx["pre_type"]]
+        if pt not in allowed_pre:
+            bad_pre.append(pt)
+        st = row[idx["stage"]]
+        if _is_null(st):
+            bad_stage.append(st)
+        k = (mmdd, pt, st)
+        if k in keys_seen:
+            bad_ratio.append(("dup", k))
+            continue
+        keys_seen.add(k)
+
+        cl = _to_float(row[idx["conn_loss_ratio"]])
+        cr = _to_float(row[idx["conn_ratio"]])
+        er = _to_float(row[idx["eff_duration_ratio"]])
+        vm = _to_float(row[idx["vm_ratio_agent_conn"]])
+        if cr < 0 or cr > 1 or vm < 0 or vm > 1:
+            bad_ratio.append(("conn/vm range", (cr, vm)))
+        if cl < 0 or cl > 1:
+            bad_ratio.append(("conn_loss range", cl))
+        if er < 0 or er > 10:
+            bad_ratio.append(("eff_duration range", er))
+
+    if bad_mmdd:
+        print(f"  ✗ MM-dd 格式异常样例: {bad_mmdd[:3]}")
+        return False
+    if bad_pre:
+        print(f"  ✗ pre_type 非 全时/手工: {sorted(set(map(str, bad_pre)))[:5]}")
+        return False
+    if bad_stage:
+        print(f"  ✗ stage 存在空值: {len(bad_stage)} 条")
+        return False
+    if len(keys_seen) != len(rows):
+        print(f"  ✗ (日期, pre_type, stage) 重复，期望 {len(rows)} 唯一键，实际 {len(keys_seen)}")
+        return False
+    if bad_ratio:
+        print(f"  ✗ 比率越界或重复键样例: {bad_ratio[:5]}")
+        return False
+
+    pre_counts = defaultdict(int)
+    stage_counts = defaultdict(int)
+    for row in rows:
+        pre_counts[row[idx["pre_type"]]] += 1
+        stage_counts[row[idx["stage"]]] += 1
+    print(f"  pre_type: {dict(sorted(pre_counts.items()))}")
+    print(f"  stage 档位数: {len(stage_counts)}")
+    print("  ✓ 粒度唯一，MM-dd / pre_type / stage / 比率范围正常")
+    return True
+
+
 # ================== 注册表 ==================
 # key = JSON 文件名（与 run_all.py 输出一致）
 # value = (验证函数, 描述)
@@ -435,6 +529,7 @@ VALIDATORS = {
     'case_stock.json':               (validate_case_stock,      '人均库存·九宫格'),
     'full_call.json':                (validate_full_call,       '全量外呼生产力'),
     'conect_rate.json':              (validate_conect_rate,     '拨打模式周度接通率'),
+    'precall_task.json':             (validate_precall_task,    '预测试任务·日×类型×账龄'),
 }
 
 

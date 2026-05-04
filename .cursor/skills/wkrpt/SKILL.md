@@ -110,7 +110,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 ### 步骤 1：执行 SQL 并落盘 JSON
 
 - 脚本：`code/python/01_execute_sql/run_all.py`
-- 行为：读取 `code/sql/` 下**全部** `*.sql`（当前 **15** 条，含 `14_full_call.sql` → `full_call.json`、`15_conect_rate.sql` → `conect_rate.json`），经 MCP **`tools/call`** 调用 **`submit_query` → `get_query_status` → `get_query_result`**，写入 `data/<basename>.json`（文件名形如 `NN_xxx.sql` 时去掉数字前缀 → `xxx.json`，与脚本内规则一致）。
+- 行为：读取 `code/sql/` 下**全部** `*.sql`（当前 **16** 条，含 `14_full_call.sql` → `full_call.json`、`15_conect_rate.sql` → `conect_rate.json`、`16_precall_task.sql` → `precall_task.json`），经 MCP **`tools/call`** 调用 **`submit_query` → `get_query_status` → `get_query_result`**，写入 `data/<basename>.json`（文件名形如 `NN_xxx.sql` 时去掉数字前缀 → `xxx.json`，与脚本内规则一致）。
 - 常用：`--list` 列 SQL；`python run_all.py 01_s_class_all` 单跑一条。
 - SQL 使用 Hive 侧动态日期，一般**无需手改日期**。
 
@@ -126,7 +126,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 
 - **主脚本**：`code/python/03_validate_data/validate_data.py`  
   - 先校验「SQL 集合与 `data/*.json` 集合」是否对齐（缺 JSON 会 hard fail）。  
-  - 按注册表对 S/M0/M1/GRP/人均工时、**`case_stock.json`（九宫格）**、**`full_call.json`（全量外呼）** 等做时间窗、回款率或列完整性校验（细节见脚本内注释与 `VALIDATORS`）。
+  - 按注册表对 S/M0/M1/GRP/人均工时、**`case_stock.json`（九宫格）**、**`full_call.json`（全量外呼）**、**`precall_task.json`（预测试任务按日×type×stage）** 等做时间窗、回款率或列完整性校验（细节见脚本内注释与 `VALIDATORS`）。
 - **兼容入口**：`code/screens/validate_data.py`（内部转调上述主脚本）。
 
 ### 步骤 4：确认继续
@@ -140,7 +140,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
   - `python code/screens/run_all_screens.py --list` 列出脚本；可传过滤参数只跑其一（见脚本 `--help`）。  
   - **清理策略**：**全量**（无过滤且未带 `--no-clean`）时，在跑第一个脚本前 **一次性删除 `screenshots/*.png`**；各 `screen_*.py` **不再单独 cleanup**，后续仅覆盖同名文件。**部分脚本**（有过滤）或 **`--no-clean`**：跳过全量删除，便于只更新部分图（单独直接运行某个 `screen_*.py` 时同理，不自动清空目录）。
 - **输出目录**：项目根 `screenshots/`（各 `screen_*.py` 内定义文件名）。
-- **图表数量**：以 `run_all_screens.py` 当次汇总为准（人均模块最多 **3** 张 PNG，取决于 `data/` 中是否存在对应 JSON）。含 **M2 / M2–M6**（`screen_m2_m6.py`，4 张）、**`screen_case_stock.py`（1 张九宫格）**、**`screen_full_call.py`（4 张）**、**`screen_call_type_weekly.py`（1 张）** 等后，`screenshots/` 常见合计约 **40～55** 张；**飞书 wiki 当前模板**插图占位约 **38** 处（以步骤 **5.5** 的 `template_analysis.json` 为准）。
+- **图表数量**：以 `run_all_screens.py` 当次汇总为准（人均模块最多 **3** 张 PNG，取决于 `data/` 中是否存在对应 JSON）。含 **M2 / M2–M6**（`screen_m2_m6.py`，4 张）、**`screen_case_stock.py`（1 张九宫格）**、**`screen_full_call.py`（4 张）**、**`screen_call_type_weekly.py`（1 张）**、**`screen_precall_task.py`（1 张预测试任务）** 等后，`screenshots/` 常见合计约 **40～56** 张；**飞书 wiki 当前模板**插图占位约 **39** 处（以步骤 **5.5** 的 `template_analysis.json` 为准）。
 
 ### 步骤 6（可选）：Git 推远端
 
@@ -206,6 +206,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 | `13_case_stock.sql` | `case_stock.json` | 人均库存 / 分案人力（含 `mth`、`case_group_type`、`col_type`，供九宫格大屏） |
 | `14_full_call.sql` | `full_call.json` | 生产力周表：`tmp_export.case_productivity_2025`，**`year`+周+`concat(case_type,'-',rank_type)` 作 `case_type`**，含 **`lag`/周环比 `*_dif`**；出图 **`screen_full_call.py`**（详见 `code/sql/README.md`） |
 | `15_conect_rate.sql` | `conect_rate.json` | 拨打模式周度：`tmp_export.col_phone_quality`，**`year`+`week_num`+`call_type`**；出图 **`screen_call_type_weekly.py`** |
+| `16_precall_task.sql` | `precall_task.json` | 预测试任务按日 × **手工/全时** × **stage**：接通率、呼损率、有效时长利用率、人工接通 VM 占比等（约近 **60** 日）；出图 **`screen_precall_task.py`** → **`precall_task_trends.png`** |
 
 历史 Query ID 可参考 `code/sql/README.md`，**以线上查询计划为准**，不必与文档表逐字一致。
 
@@ -222,8 +223,9 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 | `screen_case_stock.py` | `case_stock.json` | `case_stock_9grid.png`（3×3 人均库存 / 案件数 / 分案人数 × 非预测 / 预测 / 整体；下行表格填折线数值） | 1 |
 | `screen_full_call.py` | `full_call.json` | `full_call_full_rates.png`、`full_call_avg_calls_per_case.png`、`full_call_avg_dur_per_case.png`、`full_call_eff_rates.png`（满频 / 案均拨打 / 案均通时 / 接通率，最近 5 周；见 `code/screens/README.md`） | 4 |
 | `screen_call_type_weekly.py` | `conect_rate.json` | `call_type_weekly_connect.png` | 1 |
+| **`screen_precall_task.py`** | **`precall_task.json`** | **`precall_task_trends.png`**（**4 行指标 × 列**：手工各 stage **+ 中间 1 cm 空白 +** 全时各 stage；stage 顺序 **RA→…→M5**；相邻 stage **细**竖线、**手工/全时**分界 **粗**竖线；折线仅连**有数据日期**不插值） | 1 |
 
-**PNG 总量**：以 `run_all_screens.py` 当次汇总为准；在含 M2/M6、人均、`case_stock`、**`full_call` 四图** 与 **`call_type_weekly_connect`** 等前提下 **`screenshots/`** 常见 **40～55** 张；**飞书模板**插图数以 **`template_analysis.json`** 为准（当前约 **38**）。
+**PNG 总量**：以 `run_all_screens.py` 当次汇总为准；在含 M2/M6、人均、`case_stock`、**`full_call` 四图**、**`call_type_weekly_connect`** 与 **`precall_task_trends`** 等前提下 **`screenshots/`** 常见 **40～56** 张；**飞书模板**插图数以 **`template_analysis.json`** 为准（当前约 **39**）。
 
 ---
 
@@ -232,8 +234,13 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 ### M0 成熟度与月同期
 
 - **数据获取日**：优先 `m0_billing.json` → `metadata.data_fetch_date`；缺失时代码会按「最后一笔有效账单」启发式推断（不如 metadata 准）。
-- **成熟期示例**：逾期 1d 口径成熟 **1** 天；7d 催回率成熟 **8** 天；30d 催回率成熟 **31** 天（与 `screen_m0.py` 一致）。
-- **月同期**：标题含「月同期」的图，各月截取到**与最新月相同的月内日**（如统一截至 19 日），避免最新月天数不足稀释对比。
+- **成熟期示例**：逾期 1d 口径成熟 **1** 天；周度折线上的 **1d/3d/7d/15d/30d** 催回分别再滞后 **2/4/8/16/31** 个自然日（相对该周 `week_end`）；月维度 **7d/30d** 在 `aggregate_monthly_data` 内另要求 **`billing_date ≤ fetch−8 / fetch−31`**（日历）。
+- **周度催回（`m0_collection_rate_weekly.png`）**：周起始为**周日**，横轴为 **`week_start`**。成熟度须 **`week_end + N <= fetch`**（含边界），**禁止**写成 **`week_end + N < fetch`**，否则边界日会整条线缺点。
+- **月度「按月同期」cutoff（柱与折线共用）**：由 **`screen_m0.build_monthly_cutoff_context`**（飞书侧 **`_m0_monthly_cutoff_context`**）生成 **`cutoff_day`**，所有按月同期图（逾期金额/单量月图、7d/30d 月图及 IND 分图、IND1 占比等）的 **月内号截断**均为 **`day ≤ cutoff_day`**。**是否回退**会影响 **`cutoff_day`**，柱与折线**同步变化**。
+  - **默认**：若 **`当月1号` 日历上晚于 `fetch−8`**（理解为当月尚无任何「7d 成熟」起点），则 **回退**：**`cutoff_day = min(上月最后一天, fetch−8).day`**；**当月（fetch 所在 `YYYY-MM`）折线不画点**（`NaN`/跳过），控制台打印：**「因为本月没有7d成熟日，所以按照上月最后一个可以观察的截止日来做图」**。
+  - **非回退**：**`cutoff_day = (fetch−1).day`**（与逾期 1d 可观测对齐）。
+  - **强制旧口径（不在意本月是否有 7d 成熟）**：环境变量 **`M0_SP_NO_FALLBACK=1`**（或 **`true` / `yes` / `on`**）。此时 **始终** **`cutoff_day = (fetch−1).day`**，**不**回退、**不**跳过当月折线。适用于 **`screen_m0.py`** 与 **`generate_feishu_report.py`**（月催回 / grouped 占位符）。
+- **标题**：凡「按月同期」图为 **`…（按月同期，截至X号）`**，**`X = cutoff_day`**。
 
 ### GRP 同期
 
@@ -246,7 +253,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 
 ### 飞书插入参数（`generate_feishu_report.py` 计算项摘要）
 
-除日期 **`mm` / `mm1` / `mm2` / `DD` / `DD1`** 与逾期率、周/月催回率等外，若模板含 **合并/非合并 7d 月催回**、**IND1 占比**，脚本从 **`m0_billing_grouped.json`** 与既有月催回逻辑对齐计算：
+除日期 **`mm` / `mm1` / `mm2` / `DD` / `DD1`** 与逾期率、周/月催回率等外，若模板含 **合并/非合并 7d 月催回**、**IND1 占比**，脚本从 **`m0_billing_grouped.json`** 读取并与 **`_m0_monthly_cutoff_context`**（与 `screen_m0` **同一 cutoff / 回退 / `M0_SP_NO_FALLBACK`**）对齐计算：
 
 | 占位符 | 含义（摘要） |
 |--------|----------------|
@@ -262,12 +269,13 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 
 - **S 类**：3 口径 × 多 case_type；组合图与**对比纯表**（双行表头 S1/S2/S3 与下方月份列 **1–3 / 4–6 / 7–9** 对齐）；MTD 回款率允许 &gt;100%。
 - **M1**：整体 / 新案 / 老案各一张柱线组合图，另有三张与 S 类 `recovery_rate_S_table_*` 风格一致的**纯表图**（日 1–31 × 最近三月累积回款率）。
-- **M0**：逾期率（月/周）、催回率（周/月，7d/30d）、首逾占比、分首逾催回等；周起始与成熟度逻辑与数据脚本一致。
+- **M0**：逾期率（月/周）、催回率（周/月，7d/30d）、IND1 占比等；**月度同期 cutoff** 见上节 **`cutoff_day` / 回退 / `M0_SP_NO_FALLBACK`**；7d/30d 月图柱为 **逾期金额（`principal_pastdue_1d`）**，非到期本金。
 - **GRP**：多 case_type 柱状/折线、配色与标签防叠处理。
 - **人均工时**：整体 / Call / WA 三套数据独立成图（数据存在才出图）。
 - **M2 / M2–M6**：`screen_m2_m6.py`；分母 **assigned_principal + overdue_added_principal**；多月堆叠柱 + 双轴累积回款率折线 + 日 1–31 × 最近三月对比表。
 - **case_stock**：`screen_case_stock.py`；堆叠顺序 **S1→S2→S3**，组内 **RA→RB→RC→RD**；第一行第三列 **堆叠**用第 1、2 列「折线」人均库存序列，**红线与该行第三列表**为 **不拆分 `col_type`** 的整体 `line_metrics`（与柱总高度不一定相等）；第二、三行仅柱、无折线；详见 `code/screens/README.md`。
 - **full_call**：`screen_full_call.py`；**最近 5 周**；**每 `case_type` 单独折线**（不跨类）、**每类每周一柱**为 `*_dif`；**最近一周无数据则剔除该类型**；**上图**最近 3 周标具体值（满频/接通为 **%**，案均拨打为**次/案**，案均通时为**秒/案**）无框无底、**下图**最近 3 周标环比（率类为 pp，案均类为原单位差）；**无图例**；**`case_type` 写在轴框上方**免挡标注；**纵轴无刻度字**、**仅第三带下图**显示横轴周标签；详见 `code/screens/README.md`。
+- **precall_task**：`screen_precall_task.py`；**行＝四指标**（接通率 / 呼损率 / 有效时间利用率 / 人工接通 VM 占比），**列＝手工各 stage + 1 cm 空白 + 全时各 stage**；列内 stage 顺序 **RA→RB→RC→RD→S2→S3→M2→M4→M5**（仅数据中存在的项）；**不向时间序列插值**，仅连接有观测日；横轴无刻度；详见 `code/screens/README.md`。
 
 ---
 
@@ -275,6 +283,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 
 - **勿随意改 SQL** 中的日期与窗口逻辑，除非业务方确认；改完需重跑 1→3→5。
 - **必须**保证 `m0_billing.json`（及 grouped）带正确 **`metadata.data_fetch_date`**，否则 M0 月同期与成熟度可能偏差。
+- 若业务要求周报 **始终按 `(fetch−1).day` 截断**（不接受「月初无 7d 成熟」回退），出图 / 跑飞书前设置 **`M0_SP_NO_FALLBACK=1`**（与 `screen_m0`、`generate_feishu_report` 共用）。
 - 流水线顺序：**1 →（2.5）→ 3 → 5 →（5.5）→（7）**；跳过 3 可能把脏数据画进 PNG；模板或插图有变动时务必 **5.5** 再 **7**。
 
 ---
@@ -286,6 +295,9 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 | 步骤 1 401 | Key 失效或未写入 mcp.json | 更新 `X-API-Key`，再 `--list` / 重跑 |
 | 步骤 3 报缺 JSON | 未跑全 `run_all.py` | 重新执行步骤 1 |
 | M0 图异常 | `data_fetch_date` 错或缺失 | 检查 metadata，必要时重拉数 |
+| M0 周度催回最近几周「全线消失」 | 成熟度误用 **`week_end + N < fetch`**（应为 **`<=`**）；或横轴周起始与用户口头「×月×日那周」不一致（轴上是 **周日 week_start**） | 对齐 `screen_m0.generate_weekly_collection_rate` 与 `generate_feishu_report._calculate_weekly_collection_rates` |
+| M0 月度 7d 最新月异常（不该有却有点） | 月同期仅按「号」过滤、未按 **`billing_date ≤ fetch−8`** 截日历 | 对齐 `aggregate_monthly_data(..., same_period=True, mature_days>0)` |
+| M0 月同期与预期不一致（月初拉数） | **回退 cutoff** 或 **`M0_SP_NO_FALLBACK`** 是否开启 | 读控制台 **`build_monthly_cutoff_context`** 日志；需固定 **`(fetch−1).day`** 时设 **`M0_SP_NO_FALLBACK=1`** |
 | 中文方块 | 无中文字体 | 安装雅黑/黑体等 |
 | 飞书 429 | API 限流 | 脚本内已有退避；稍后重试 |
 | 飞书占位图未替换 | `screenshots` 缺对应 PNG 或文件名与模板 `[...]` 不一致 | 对齐文件名或补跑步骤 5；跑 **5.5** 看 `template_analysis.json` 中 `missing_files` |
@@ -334,6 +346,7 @@ python screen_m2_m6.py
 python screen_case_stock.py
 python screen_full_call.py
 python screen_call_type_weekly.py
+python screen_precall_task.py
 ```
 
 ---
@@ -349,6 +362,9 @@ python screen_call_type_weekly.py
 
 ## 更新记录
 
+- **2026-05-06（预测试任务 SQL16 + 图 + 校验 + 飞书插图）**：新增 **`16_precall_task.sql` → `precall_task.json`**；**`validate_data`** 注册 **`precall_task.json`**；**`screen_precall_task.py` → `precall_task_trends.png`**（版式与分隔线规则见上表）；飞书模板占位 **`[precall_task_trends.png]`**（插图位约 **39**，以 **5.5** 为准）。
+- **2026-05-05（M0 月同期 cutoff 柱线统一 + `M0_SP_NO_FALLBACK`）**：月度「按月同期」**柱与折线共用 `cutoff_day`**；月初无 **7d** 成熟起点时 **回退** `min(上月末, fetch−8)` 并 **跳过当月折线**，控制台固定提示；环境变量 **`M0_SP_NO_FALLBACK`** 与 **`screen_m0` / `generate_feishu_report`** 对齐；标题 **截至 X 号**；本节替换旧「柱至上月末」描述。
+- **2026-04-30（M0 成熟度口径锁死）**：Skill 增补 **周度 `week_end+N <= fetch`**、**月度日历截断 `billing_date ≤ fetch−N`**，避免改代码或对照飞书时再引入 **严格 `<` 与 `≤` 混用** 或「仅按号同期」类回归；故障表增加对应两行。
 - **2026-05-04（飞书 Docx 文本与模板）**：步骤 7 补充 **`*dif` 上升/下降 + 加粗着色**、**`rate_prin_od_dif` / `rate_cnt_od_dif` 颜色与催回类相反**、**同段多 `[*.png]`**、**默认标题** `催收周报（日期）_{Unix时间戳}`；关键业务增加 **`m0_billing_grouped` 派生占位符** 表；故障表增加多图说明；步骤 5 / PNG 总量区分 **全量出图张数** vs **wiki 模板插图位**（以 `template_analysis.json` 为准）。
 - **2026-05-03（`.cursor` Skill 纳入 Git + 同步脚本）**：`.gitignore` 取消对 **整个** `.cursor/` 的无差别忽略，改为跟踪 **`.cursor/skills/wkrpt/SKILL.md`**；新增 **`scripts/sync_wkrpt_skills.py`**；路径约定写明「改 wkrpt 后先同步脚本再提交」及此前 Gitee 无 Cursor 端文件的原因。
 - **2026-05-03（飞书 wiki 模板 + `full_call` SQL）**：默认 wiki 模板改为 **`WHruwVACAi8nWPkXYgQcrLhHnFb`**（与 `generate_feishu_report.py` / `analyze_template.py` 对齐）；步骤 7 / 5.5 写明知识库复制成功日志、**高亮块/引用** 依赖整篇复制、新空间须重新授权；步骤 1 写明当前 **14** 条 SQL；数据映射增加 **`14_full_call` → `full_call.json`**。
@@ -360,4 +376,4 @@ python screen_call_type_weekly.py
 - **2026-04-30**：Git 同步须用户选择远端；`screenshots` 不纳入版本库。
 - **2026-04-27 及更早**：人均工时 SQL/图表、metadata、M0 成熟度、GRP 美化等（详见历史提交与旧版 Skill）。
 
-**最后更新**：2026-05-04（见上条「飞书 Docx 文本与模板」；仓库 README / `_audit_params` 同步）
+**最后更新**：2026-05-06（预测试任务 precall_task；SQL **16**；飞书插图约 **39**；历史条目仍保留于上表）
