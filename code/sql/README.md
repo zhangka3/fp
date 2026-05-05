@@ -24,6 +24,7 @@
 | 14_full_call.sql | full_call.json | tmp_export.case_productivity_2025 | **周粒度**：`year` + `weekofyear(dt)` + **`concat(case_type,'-',rank_type)` 作为输出列 `case_type`**；满频/接通汇总 + **案均拨打** + **案均有效通时**（`avg_self_dur_per_case` 等，见下）+ **`lag` / 周环比 `*_dif`**。过滤：近 100 天、非红休、`collector_type`、首期状态等见 SQL。出图：**`screen_full_call.py`** → `full_call_full_rates.png`、`full_call_avg_calls_per_case.png`、`full_call_avg_dur_per_case.png`、`full_call_eff_rates.png`（最近 5 周；生成顺序：满频→案均拨打→案均通时→接通率） | 约 **100～200** 行量级（随周数 × 复合类型数变化；非旧版「日×多维」上千行） |
 | 15_conect_rate.sql | conect_rate.json | tmp_export.col_phone_quality | **周粒度**：`year(created_date)`、`weekofyear(created_date)` 为 **`week_num`**；**`call_type`** 由 `call_type_code` 映射（预测外呼 / IVR / 一键多呼 / 手拨 / 其他）；**`connect_rate`** = 有效接通通次 / 通次（见 SQL）；**`call_cnt`** = `count(policy_call_id)`。仅 **`scope='in号码质量分析范围'`**；`created_date` 约 **120** 天窗口。出图：**`screen_call_type_weekly.py`** → `call_type_weekly_connect.png` | 约 **周数 × 5 call_type** 行量级 |
 | 16_precall_task.sql | precall_task.json | `tmp_export.pre_call_01` 等（见 SQL） | **日 × `pre_type`（手工/全时）× `stage`**：`conn_ratio`、`conn_loss_ratio`、`eff_duration_ratio`、`vm_ratio_agent_conn`；`call_create_date` 约 **60** 天；排除部分 `task_id`。出图：**`screen_precall_task.py`** → **`precall_task_trends.png`** | 随组合数变化 |
+| 17_precall_afterkeep.sql | precall_afterkeep.json | `tmp_export.pre_call_after_reverse_call_01` | **日 × 手工/全时 × `stage`**：`keep_rate`、`avg_callcnt_percase_afterkeep`、`conn_rate_afterkeep`；首列 **`mm_dd`**；`dt` 约 **60** 日。出图：**`screen_precall_afterkeep.py`** → **`precall_afterkeep_trends.png`** | 随组合数变化 |
 
 实际 **query_id** 以每次运行后 `data/*.json` 内 `metadata.query_id` 为准。
 
@@ -73,6 +74,13 @@
 - **时间**：约 **`current_date() − 60`** 起；过滤 **`pre_type`/`stage` 非空**及排除 `task_id`（见 SQL）。
 - **图表**：`code/screens/screen_precall_task.py` → `screenshots/precall_task_trends.png`（详见 `code/screens/README.md`）。
 - **校验**：`validate_precall_task`（`VALIDATORS['precall_task.json']`）。
+
+### precall_afterkeep（17）
+
+- **粒度**：按 **`mm_dd`**（由 `dt` 推导）、**`pre_type`**（全时 / 手工，与 SQL16 同规则）、**`stage`**；指标 **`keep_rate`**、**`avg_callcnt_percase_afterkeep`**、**`conn_rate_afterkeep`**。
+- **时间**：`dt >= date_sub(current_date(),60)`（`yyyyMMdd`）；源表 **`tmp_export.pre_call_after_reverse_call_01`**。
+- **图表**：`code/screens/screen_precall_afterkeep.py` → `screenshots/precall_afterkeep_trends.png`（版式对齐 `precall_task_trends`）。
+- **校验**：`validate_precall_afterkeep`（`VALIDATORS['precall_afterkeep.json']`）。
 
 ### full_call（14）
 

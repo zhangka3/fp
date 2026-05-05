@@ -509,6 +509,116 @@ def validate_precall_task(filename, desc="预测试任务·日×类型×账龄")
     return True
 
 
+def validate_precall_afterkeep(filename, desc="留案后外呼·日×类型×账龄"):
+    """17_precall_afterkeep → precall_afterkeep.json：日 × (pre_type|type) × stage；留案率/接通率∈[0,1]，案均拨次非负。
+
+    日期列可为 **mm_dd**（MM-dd）或 **dt**（yyyyMMdd）；类型列可为 **pre_type** 或 **type**。
+    """
+    print(f"\n[{desc}] {filename}")
+    data = _load(filename)
+    if data is None:
+        print("  ✗ 文件不存在")
+        return False
+    header = data["header"]
+    rows = data["rows"]
+    idx = {name: i for i, name in enumerate(header)}
+    for k in ("stage", "keep_rate", "avg_callcnt_percase_afterkeep", "conn_rate_afterkeep"):
+        if k not in idx:
+            print(f"  ✗ 缺少字段: {k}")
+            return False
+    if "pre_type" in idx:
+        i_pre = idx["pre_type"]
+        pre_label = "pre_type"
+    elif "type" in idx:
+        i_pre = idx["type"]
+        pre_label = "type"
+    else:
+        print("  ✗ 缺少 pre_type 或 type")
+        return False
+    if "mm_dd" in idx:
+        i_date = idx["mm_dd"]
+        date_kind = "mm_dd"
+    elif "dt" in idx:
+        i_date = idx["dt"]
+        date_kind = "dt"
+    else:
+        print("  ✗ 缺少 mm_dd 或 dt")
+        return False
+
+    print(f"  行数: {len(rows)} (日期列={date_kind}, 类型列={pre_label})")
+    if not rows:
+        print("  ✗ 无数据")
+        return False
+
+    mmdd_re = re.compile(r"^\d{2}-\d{2}$")
+    dt_re = re.compile(r"^\d{8}$")
+    allowed_pre = {"全时", "手工"}
+    keys_seen = set()
+    bad_date = []
+    bad_pre = []
+    bad_stage = []
+    bad_val = []
+
+    def _norm_date_key(raw) -> str:
+        s = str(raw).strip().replace("-", "")
+        if date_kind == "mm_dd":
+            return s if mmdd_re.match(str(raw).strip()) else ""
+        return s if dt_re.match(s) else ""
+
+    for row in rows:
+        raw_d = row[i_date]
+        dk = _norm_date_key(raw_d)
+        if not dk:
+            bad_date.append(raw_d)
+        pt = row[i_pre]
+        if pt not in allowed_pre:
+            bad_pre.append(pt)
+        st = row[idx["stage"]]
+        if _is_null(st):
+            bad_stage.append(st)
+        k = (dk or str(raw_d), pt, st)
+        if k in keys_seen:
+            bad_val.append(("dup", k))
+            continue
+        keys_seen.add(k)
+
+        kr = _to_float(row[idx["keep_rate"]], default=float("nan"))
+        av = _to_float(row[idx["avg_callcnt_percase_afterkeep"]], default=float("nan"))
+        cr = _to_float(row[idx["conn_rate_afterkeep"]], default=float("nan"))
+        if kr == kr and (kr < 0 or kr > 1):
+            bad_val.append(("keep_rate", kr))
+        if av == av and av < 0:
+            bad_val.append(("avg_callcnt", av))
+        if cr == cr and (cr < 0 or cr > 1):
+            bad_val.append(("conn_rate_afterkeep", cr))
+
+    if bad_date:
+        print(f"  ✗ 日期格式异常样例: {bad_date[:3]}")
+        return False
+    if bad_pre:
+        print(f"  ✗ 类型非 全时/手工: {sorted(set(map(str, bad_pre)))[:5]}")
+        return False
+    if bad_stage:
+        print(f"  ✗ stage 存在空值: {len(bad_stage)} 条")
+        return False
+    if len(keys_seen) != len(rows):
+        print(f"  ✗ (日期, 类型, stage) 重复，期望 {len(rows)} 唯一键，实际 {len(keys_seen)}")
+        return False
+    if bad_val:
+        print(f"  ✗ 数值越界或重复键样例: {bad_val[:5]}")
+        return False
+
+    pre_counts = defaultdict(int)
+    stage_counts = defaultdict(int)
+    for row in rows:
+        pre_counts[row[i_pre]] += 1
+        stage_counts[row[idx["stage"]]] += 1
+    print(f"  类型分布: {dict(sorted(pre_counts.items()))}")
+    print(f"  stage 档位数: {len(stage_counts)}")
+    print("  ✓ 粒度唯一，日期/类型/stage / 数值范围正常")
+    return True
+
+
 # ================== 注册表 ==================
 # key = JSON 文件名（与 run_all.py 输出一致）
 # value = (验证函数, 描述)
@@ -530,6 +640,7 @@ VALIDATORS = {
     'full_call.json':                (validate_full_call,       '全量外呼生产力'),
     'conect_rate.json':              (validate_conect_rate,     '拨打模式周度接通率'),
     'precall_task.json':             (validate_precall_task,    '预测试任务·日×类型×账龄'),
+    'precall_afterkeep.json':        (validate_precall_afterkeep, '留案后外呼·日×类型×账龄'),
 }
 
 

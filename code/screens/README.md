@@ -23,6 +23,7 @@ python code/screens/run_all_screens.py screen_grp # 只跑匹配项（见脚本 
 | **`screen_full_call.py`** | **`full_call.json`**（`14_full_call.sql`） | **`full_call_full_rates.png`**（满频）、**`full_call_avg_calls_per_case.png`**（案均拨打）、**`full_call_avg_dur_per_case.png`**（案均有效通时）、**`full_call_eff_rates.png`**（有效接通率）；各图均为本人/非本人/整体三带；**最近 5 周**，按 `case_type` 排序（见下文） |
 | **`screen_call_type_weekly.py`** | **`conect_rate.json`**（`15_conect_rate.sql`） | **`call_type_weekly_connect.png`**（周 × `call_type`：上行接通率折线、下行拨打量堆叠柱；**24×16 英寸** 与 `full_call_eff_rates.png` 同高） |
 | **`screen_precall_task.py`** | **`precall_task.json`**（`16_precall_task.sql`） | **`precall_task_trends.png`**（预测试任务：**4 行指标 × 列＝手工 stage + 1 cm 空白 + 全时 stage**） |
+| **`screen_precall_afterkeep.py`** | **`precall_afterkeep.json`**（`17_precall_afterkeep.sql`） | **`precall_afterkeep_trends.png`**（留案/留案后外呼：**3 行**＝留案率、案均拨次、留案后接通率；版式同 precall_task） |
 
 视觉主题见同目录 **`chart_theme.py`**（各脚本 `import chart_theme` 后 `apply_chart_theme()`）。
 
@@ -79,6 +80,17 @@ cd code/screens
 python screen_precall_task.py
 ```
 
+## `screen_precall_afterkeep.py`（留案 / 留案后外呼 · 手工/全时 × stage）
+
+- **依赖**：`data/precall_afterkeep.json`（`code/sql/17_precall_afterkeep.sql` → `run_all.py`）。
+- **输出**：`screenshots/precall_afterkeep_trends.png`（画布宽高规则与 **`screen_precall_task.py`** 同类：`10 + 2.35 × n_col` 宽、`6.8 + 1.55 × 3` 高三行）。
+- **版式**：**行＝三指标**——留案率、留案后案均拨次、留案后接通率；列、分隔线、折线规则与 **`precall_task_trends.png`** 一致（见上节）。
+
+```powershell
+cd code/screens
+python screen_precall_afterkeep.py
+```
+
 ## `screen_case_stock.py`（人均库存看板）
 
 - **依赖**：`data/case_stock.json`（由 `code/sql/13_case_stock.sql` 经 `run_all.py` 导出）。
@@ -124,4 +136,5 @@ python screen_case_stock.py
 2026-05-04 — 新增 **`screen_call_type_weekly.py`** → **`call_type_weekly_connect.png`**（`15_conect_rate` / `conect_rate.json`）。  
 2026-05-03 — **`case_type` 横轴排序** 改为按末尾档位解析 + **M 档位数值序**（M4+ 在 M5+ 前）；三张图生成顺序为 **满频→案均→接通**。  
 2026-05-04 — 飞书：`generate_feishu_report` 对正文 **`{…dif}`** 做「上升/下降」加粗着色（**`rate_prin_od_dif` / `rate_cnt_od_dif` 颜色与催回类相反**）；同一段可连续 **`[*.png][*.png]`** 占位；详见根目录 **wkrpt** Skill。  
-2026-05-06 — 新增 **`screen_precall_task.py`** → **`precall_task_trends.png`**（`16_precall_task` / `precall_task.json`）；版式、分隔线与 stage 顺序见本节。
+2026-05-06 — 新增 **`screen_precall_task.py`** → **`precall_task_trends.png`**（`16_precall_task` / `precall_task.json`）；版式、分隔线与 stage 顺序见本节。  
+2026-04-30 — 新增 **`screen_precall_afterkeep.py`** → **`precall_afterkeep_trends.png`**（`17_precall_afterkeep` / `precall_afterkeep.json`）；三行指标对齐 precall_task 版式。

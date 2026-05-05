@@ -279,7 +279,10 @@ def aggregate_monthly_data(rows, data_fetch_date, mature_days=0, same_period=Fal
 
 
 def generate_monthly_principal_overdue_rate(monthly_data, ctx: MonthlyCutoffContext):
-    """1. 金额逾期率（by月同期）：柱与折线共用同一月同期桶；回退模式下当月不画逾期率折线点。"""
+    """1. 金额逾期率（by月同期）：柱与折线共用同一月同期桶。
+
+    **截止号**：始终 **(fetch−1).day**，不参与「月初无 7d 成熟」回退（与 7d/30d 催回月图分列）。
+    """
     months = sorted(monthly_data.keys())
     month_labels = [f"{m[5:7]}.01" for m in months]
     principals = []
@@ -349,7 +352,7 @@ def generate_monthly_principal_overdue_rate(monthly_data, ctx: MonthlyCutoffCont
 
 
 def generate_monthly_count_overdue_rate(monthly_data, ctx: MonthlyCutoffContext):
-    """2. 单量逾期率（by月同期）；口径同 generate_monthly_principal_overdue_rate"""
+    """2. 单量逾期率（by月同期）；截止号与金额逾期月图一致：**恒为 (fetch−1).day**，无回退。"""
     months = sorted(monthly_data.keys())
     month_labels = [f"{m[5:7]}.01" for m in months]
     counts = []
@@ -751,7 +754,8 @@ def generate_monthly_collection_rate_7d_30d(rows, data_fetch_date, ctx: MonthlyC
 
 def generate_ind_ratio_chart(grouped_rows, data_fetch_date, ctx: MonthlyCutoffContext):
     """
-    6. IND1占比图（按月同期折线）：与 ctx 折线截止号一致，且 billing≤fetch-1；月初无7d成熟时当月不画点。
+    6. IND1占比图（按月同期折线）：月同期截止号恒为 **本数据源取数日的 (fetch-1).day**，
+    且 billing 日 ≤ fetch-1；不参与「月初无 7d 成熟」回退（传入 ctx 须 line_fallback=False）。
     """
     from collections import defaultdict
 
@@ -1032,17 +1036,39 @@ def main():
     print("\n聚合数据:")
     ctx = build_monthly_cutoff_context(data_fetch_date)
 
+    # 金额/单量「逾期」月图：月同期截止号固定 billing 的 (fetch-1).day，不参与 7d 成熟回退（与催回月图 ctx 分列）
+    cutoff_overdue_monthly = (data_fetch_date - timedelta(days=1)).day
     monthly_data_overdue = aggregate_monthly_data(
         m0_rows, data_fetch_date, mature_days=1, same_period=True,
-        same_period_cutoff_day=ctx.cutoff_day)
+        same_period_cutoff_day=cutoff_overdue_monthly)
+    ctx_overdue_monthly = MonthlyCutoffContext(
+        False,
+        cutoff_overdue_monthly,
+        ctx.fetch_month_key,
+        None,
+        ctx.forced_normal,
+    )
+
+    # IND1 占比月图：与 grouped 取数日的 (fetch-1).day 一致，不参与 7d 成熟回退
+    fd_g = _fetch_calendar_date(data_fetch_date_grouped)
+    cutoff_ind_ratio_monthly = (data_fetch_date_grouped - timedelta(days=1)).day
+    ctx_ind_ratio_monthly = MonthlyCutoffContext(
+        False,
+        cutoff_ind_ratio_monthly,
+        fd_g.strftime('%Y-%m'),
+        None,
+        ctx.forced_normal,
+    )
 
     weekly_data_overdue = aggregate_weekly_data(m0_rows, data_fetch_date, mature_days=1)
     weekly_data_collection = aggregate_weekly_data(m0_rows, data_fetch_date, mature_days=0)
 
-    print(f"  月同期（柱与折线共用截止号）: 每月≤{ctx.cutoff_day}号"
+    print(f"  月同期（7d/30d 催回等，柱与折线共用截止号）: 每月≤{ctx.cutoff_day}号"
           + (" [回退: 本月无7d成熟日]" if ctx.line_fallback else ""))
+    print(f"  月同期（金额/单量逾期月图）: 固定每月≤{cutoff_overdue_monthly}号（billing fetch-1，无回退）")
+    print(f"  月同期（IND1占比图）: 固定每月≤{cutoff_ind_ratio_monthly}号（grouped fetch-1，无回退）")
     if ctx.forced_normal:
-        print("  [提示] 已启用环境变量 M0_SP_NO_FALLBACK：始终使用 (fetch−1).day，不因本月无7d成熟而回退。")
+        print("  [提示] 已启用环境变量 M0_SP_NO_FALLBACK：始终使用 (fetch-1).day，不因本月无7d成熟而回退。")
     if ctx.notice:
         print(f"  [提示] {ctx.notice}")
 
@@ -1052,12 +1078,12 @@ def main():
 
     # 生成图表
     print("\n生成图表:")
-    generate_monthly_principal_overdue_rate(monthly_data_overdue, ctx)
-    generate_monthly_count_overdue_rate(monthly_data_overdue, ctx)
+    generate_monthly_principal_overdue_rate(monthly_data_overdue, ctx_overdue_monthly)
+    generate_monthly_count_overdue_rate(monthly_data_overdue, ctx_overdue_monthly)
     generate_weekly_principal_overdue_rate(weekly_data_overdue)
     generate_weekly_collection_rate(weekly_data_collection, data_fetch_date)
     generate_monthly_collection_rate_7d_30d(m0_rows, data_fetch_date, ctx)
-    generate_ind_ratio_chart(m0_grouped_rows, data_fetch_date_grouped, ctx)
+    generate_ind_ratio_chart(m0_grouped_rows, data_fetch_date_grouped, ctx_ind_ratio_monthly)
     generate_ind_collection_rate_chart(m0_grouped_rows, data_fetch_date_grouped, ctx)
 
     print("\n" + "=" * 60)

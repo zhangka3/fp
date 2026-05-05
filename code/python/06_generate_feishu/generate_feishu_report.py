@@ -55,6 +55,16 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 from feishu_creds import FEISHU_CREDENTIALS_HELP, load_feishu_app_credentials
 
+_fe_dir = Path(__file__).resolve().parent
+if str(_fe_dir) not in sys.path:
+    sys.path.insert(0, str(_fe_dir))
+from feishu_param_specs import (
+    IMPLEMENTED_TEXT_PARAMS,
+    PLANNED_M1_MTD_PARAMS,
+    PNG_PLACEHOLDER_SPECS,
+    merge_spec_row,
+)
+
 
 class FeishuReportGenerator:
     def __init__(self, app_id, app_secret, data_dir=None):
@@ -364,7 +374,7 @@ class FeishuReportGenerator:
         return merged
 
     def _param_replace_text_runs(self, content, base_style=None):
-        """将一段 text_run 的 content 展开为若干 {content, text_element_style}（处理 *dif 上升/下降着色）。"""
+        """将一段 text_run 的 content 展开为若干 {content, text_element_style}（处理 *dif 上升/下降着色；下降为绝对值无负号）。"""
         base_style = base_style or {}
         content = self._replace_bracket_shortcuts(content)
         out = []
@@ -390,7 +400,9 @@ class FeishuReportGenerator:
                 if num is not None:
                     prefix = "上升" if num >= 0 else "下降"
                     extra = "pp" if has_pp else ""
-                    styled = prefix + val_str + extra
+                    # 下降时不带负号，只展示降低的绝对值（与「上升」对称）
+                    disp = f"{num:.2f}" if num >= 0 else f"{abs(num):.2f}"
+                    styled = prefix + disp + extra
                     # 金额/单量逾期率差分：>=0 红、<0 绿（「坏」上升）；其余 *dif 仍 >=0 绿、<0 红
                     invert_od = key in ("rate_prin_od_dif", "rate_cnt_od_dif")
                     if invert_od:
@@ -631,7 +643,7 @@ class FeishuReportGenerator:
                 dfs_patch(cid)
 
         nd_url = f"https://www.feishu.cn/docx/{new_id}"
-        print("\n[上传图片]...")
+        print("\n[7/7] 上传插图（知识库/云盘复制模式）…")
         screenshots_path = Path(screenshots_dir)
         unmapped = [n for n in img_placeholder_order if not img_placeholder_map.get(n)]
         if unmapped:
@@ -719,6 +731,217 @@ class FeishuReportGenerator:
 
         # 合并订单/非合并 7d 月催回 + IND1 占比（从 m0_billing_grouped.json，与 screen_m0 分图对齐）
         self._calculate_monthly_ind_from_grouped()
+
+        # M1/M2/M2-M6 月 MTD 累积回款率（与 assignment_repayment_*、recovery_rate_M2/M6 图口径一致）
+        self._calculate_mth_mtdcolrate_params()
+
+    def _calculate_mth_mtdcolrate_params(self):
+        """{mth_mtdcolrate_m1*}：m1_assignment_repayment.json；{mth_mtdcolrate_m2*}：M2_class_all；
+        {mth_mtdcolrate_m2m6}：M6_class_all。最近月最后一个有效日的累积回款率；环比为与上一自然月「同日」对比（上月无同日则取上月最后有效日），差值为百分点。"""
+        defaults = {
+            "mth_mtdcolrate_m1": "XX.XX%",
+            "mth_mtdcolrate_m1_dif": "X.XX",
+            "mth_mtdcolrate_m1new": "XX.XX%",
+            "mth_mtdcolrate_m1new_dif": "X.XX",
+            "mth_mtdcolrate_m1old": "XX.XX%",
+            "mth_mtdcolrate_m1old_dif": "X.XX",
+            "mth_mtdcolrate_m2": "XX.XX%",
+            "mth_mtdcolrate_m2_dif": "X.XX",
+            "mth_mtdcolrate_m2m6": "XX.XX%",
+        }
+
+        def _fmt_pct(v: float | None) -> str:
+            return "XX.XX%" if v is None else f"{v:.2f}%"
+
+        def _fmt_dif(cur: float | None, prev: float | None) -> str:
+            if cur is None:
+                return "X.XX"
+            if prev is None:
+                return "0.00"
+            return f"{cur - prev:.2f}"
+
+        def _m1_single_case_pipeline(case_filter: str):
+            """仅 新案 或 老案：与 screen_m1 单图过滤一致。"""
+            path = self.data_dir / "m1_assignment_repayment.json"
+            if not path.is_file():
+                return None, None
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                rows = data.get("rows") or []
+            except Exception:
+                return None, None
+            from collections import defaultdict
+
+            data_by_month = defaultdict(lambda: defaultdict(dict))
+            for row in rows:
+                if not isinstance(row, list) or len(row) < 7:
+                    continue
+                month, day_full, ct, ap, _, rp, _ = row
+                if rp is None or rp == "NULL":
+                    continue
+                if ct != case_filter:
+                    continue
+                day = int(str(day_full).split("-")[-1])
+                data_by_month[month][day][ct] = {"a": float(ap or 0), "r": float(rp or 0)}
+
+            def _rate_on_day(month_key: str, day: int) -> float | None:
+                if month_key not in data_by_month or day not in data_by_month[month_key]:
+                    return None
+                if case_filter not in data_by_month[month_key][day]:
+                    return None
+                cell = data_by_month[month_key][day][case_filter]
+                ta, tr = cell["a"], cell["r"]
+                return (tr / ta * 100.0) if ta > 0 else None
+
+            months_sorted = sorted(data_by_month.keys())
+            if not months_sorted:
+                return None, None
+            lm = months_sorted[-1]
+            anchor_d = max(data_by_month[lm].keys())
+            rate_cur = _rate_on_day(lm, anchor_d)
+            if len(months_sorted) < 2:
+                return rate_cur, None
+            pm = months_sorted[-2]
+            rate_prev = _rate_on_day(pm, anchor_d)
+            if rate_prev is None and pm in data_by_month:
+                pd_fallback = max(data_by_month[pm].keys())
+                rate_prev = _rate_on_day(pm, pd_fallback)
+            return rate_cur, rate_prev
+
+        def _m1_overall_rate_last_days():
+            """整体：每日 新案+老案 合并（同一 filter None 时用两行聚合）。"""
+            path = self.data_dir / "m1_assignment_repayment.json"
+            if not path.is_file():
+                return None, None
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                rows = data.get("rows") or []
+            except Exception:
+                return None, None
+            from collections import defaultdict
+
+            data_by_month = defaultdict(lambda: defaultdict(lambda: {"a": 0.0, "r": 0.0}))
+            for row in rows:
+                if not isinstance(row, list) or len(row) < 7:
+                    continue
+                month, day_full, ct, ap, _, rp, _ = row
+                if rp is None or rp == "NULL":
+                    continue
+                if ct not in ("新案", "老案"):
+                    continue
+                day = int(str(day_full).split("-")[-1])
+                data_by_month[month][day]["a"] += float(ap or 0)
+                data_by_month[month][day]["r"] += float(rp or 0)
+
+            def _rate_on_day(month_key: str, day: int) -> float | None:
+                if month_key not in data_by_month or day not in data_by_month[month_key]:
+                    return None
+                cell = data_by_month[month_key][day]
+                ta, tr = cell["a"], cell["r"]
+                return (tr / ta * 100.0) if ta > 0 else None
+
+            months_sorted = sorted(data_by_month.keys())
+            if not months_sorted:
+                return None, None
+            lm = months_sorted[-1]
+            anchor_d = max(data_by_month[lm].keys())
+            rate_cur = _rate_on_day(lm, anchor_d)
+            if len(months_sorted) < 2:
+                return rate_cur, None
+            pm = months_sorted[-2]
+            rate_prev = _rate_on_day(pm, anchor_d)
+            if rate_prev is None and pm in data_by_month:
+                pd_fallback = max(data_by_month[pm].keys())
+                rate_prev = _rate_on_day(pm, pd_fallback)
+            return rate_cur, rate_prev
+
+        def _m2_style_rates(json_name: str):
+            """与 screen_m2_m6._build_chart_data 一致：按日累加后 cum_rate 序列。"""
+            path = self.data_dir / json_name
+            if not path.is_file():
+                return None, None
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                rows = raw.get("rows") or []
+                header = raw.get("header") or []
+            except Exception:
+                return None, None
+            idx = {name: i for i, name in enumerate(header)}
+            need = ("p_month", "day", "assigned_principal", "overdue_added_principal", "repaid_principal")
+            if not all(k in idx for k in need):
+                return None, None
+            pm_i, d_i = idx["p_month"], idx["day"]
+            from collections import defaultdict
+
+            buckets = defaultdict(list)
+            max_idx = max(idx.values())
+            for row in rows:
+                if not isinstance(row, list) or len(row) <= max_idx:
+                    continue
+                rp = row[idx["repaid_principal"]]
+                if rp is None or rp == "NULL":
+                    continue
+                buckets[row[pm_i]].append(row)
+            day_rate_by_month = {}
+            for month in sorted(buckets.keys()):
+                rows_m = sorted(buckets[month], key=lambda r: int(float(r[d_i])))
+                total_a = total_o = total_r = 0.0
+                dr = {}
+                for row in rows_m:
+                    day = int(float(row[d_i]))
+                    av = float(row[idx["assigned_principal"]] or 0)
+                    ov = float(row[idx["overdue_added_principal"]] or 0)
+                    rv = float(row[idx["repaid_principal"]] or 0)
+                    total_a += av
+                    total_o += ov
+                    total_r += rv
+                    base = total_a + total_o
+                    dr[day] = (total_r / base * 100.0) if base > 0 else 0.0
+                if dr:
+                    day_rate_by_month[month] = dr
+            months_sorted = sorted(day_rate_by_month.keys())
+            if not months_sorted:
+                return None, None
+            lm = months_sorted[-1]
+            anchor_d = max(day_rate_by_month[lm].keys())
+            cur = day_rate_by_month[lm][anchor_d]
+            if len(months_sorted) < 2:
+                return cur, None
+            pm = months_sorted[-2]
+            pm_days = day_rate_by_month[pm]
+            prev = pm_days.get(anchor_d)
+            if prev is None:
+                prev = pm_days[max(pm_days.keys())]
+            return cur, prev
+
+        try:
+            c_m1, p_m1 = _m1_overall_rate_last_days()
+            c_new, p_new = _m1_single_case_pipeline("新案")
+            c_old, p_old = _m1_single_case_pipeline("老案")
+            c_m2, p_m2 = _m2_style_rates("M2_class_all.json")
+            c_m6, p_m6 = _m2_style_rates("M6_class_all.json")
+
+            self.params.update(
+                {
+                    "mth_mtdcolrate_m1": _fmt_pct(c_m1),
+                    "mth_mtdcolrate_m1_dif": _fmt_dif(c_m1, p_m1),
+                    "mth_mtdcolrate_m1new": _fmt_pct(c_new),
+                    "mth_mtdcolrate_m1new_dif": _fmt_dif(c_new, p_new),
+                    "mth_mtdcolrate_m1old": _fmt_pct(c_old),
+                    "mth_mtdcolrate_m1old_dif": _fmt_dif(c_old, p_old),
+                    "mth_mtdcolrate_m2": _fmt_pct(c_m2),
+                    "mth_mtdcolrate_m2_dif": _fmt_dif(c_m2, p_m2),
+                    "mth_mtdcolrate_m2m6": _fmt_pct(c_m6),
+                }
+            )
+            print(
+                f"   [mtd_m1] m1整体={self.params['mth_mtdcolrate_m1']} dif={self.params['mth_mtdcolrate_m1_dif']} | "
+                f"新案={self.params['mth_mtdcolrate_m1new']} | 老案={self.params['mth_mtdcolrate_m1old']} | "
+                f"M2={self.params['mth_mtdcolrate_m2']} | M2-M6={self.params['mth_mtdcolrate_m2m6']}"
+            )
+        except Exception as e:
+            print(f"   [WARN] MTD 分案回款占位符计算失败: {e}")
+            self.params.update(defaults)
 
     def _calculate_weekly_collection_rates(self):
         """计算 {wk_colrate7d}, {wk_colrate7d_dif}, {wk_colrate15d}, {wk_colrate15d_dif}
@@ -884,7 +1107,10 @@ class FeishuReportGenerator:
             self._set_monthly_defaults()
 
     def _calculate_monthly_ind_from_grouped(self):
-        """{mth_colrate7d_ind0/1}、占比与差分：与 m0_collection_rate_7d_30d_monthly_ind*.png / m0_ind1_ratio.png 口径一致。"""
+        """{mth_colrate7d_ind0/1}：与 m0_collection_rate_7d_30d_monthly_ind*.png 一致（月同期 cutoff 可回退）。
+
+        {mth_ind1_ratio} 等占比：与 m0_ind1_ratio.png 一致，月同期恒为 (fetch-1).day，不参与回退。
+        """
         from collections import defaultdict
 
         gpath = self.data_dir / "m0_billing_grouped.json"
@@ -902,6 +1128,7 @@ class FeishuReportGenerator:
             fetch_date = datetime.strptime(fetch_str, "%Y-%m-%d")
             ctx = _m0_monthly_cutoff_context(fetch_date)
             cutoff_line = ctx['cutoff_day']
+            cutoff_ind1_share = (fetch_date - timedelta(days=1)).day
             max_b1 = (fetch_date - timedelta(days=1)).date()
             max_billing_7d = (fetch_date - timedelta(days=8)).date()
 
@@ -919,7 +1146,7 @@ class FeishuReportGenerator:
                 if ind not in ("0", "1"):
                     continue
                 bd = bdate.date()
-                if bdate.day <= cutoff_line and bd <= max_b1:
+                if bdate.day <= cutoff_ind1_share and bd <= max_b1:
                     p1 = float(row[5]) or 0.0
                     if ind == "0":
                         monthly_ind[mkey]["ind0"] += p1
@@ -1028,6 +1255,126 @@ class FeishuReportGenerator:
               f"DD={self.params.get('DD')}, DD1={self.params.get('DD1')}")
         print(f"   prin={self.params.get('rate_prin_od')}, cnt={self.params.get('rate_cnt_od')}")
         print("[参数] 完成\n")
+
+    def _extract_text_placeholders_from_blocks(self, blocks):
+        all_params = set()
+        for b in blocks:
+            text = self._get_block_text(b)
+            for m in re.finditer(r"\{(\w+)\}", text):
+                all_params.add(m.group(1))
+        return all_params
+
+    def _collect_img_placeholder_order_from_blocks(self, blocks):
+        by_id = {b["block_id"]: b for b in blocks}
+        order = []
+        seen_img_blocks = set()
+
+        def walk(blist):
+            for b in blist:
+                if b.get("block_type") == 1:
+                    continue
+                bid = b.get("block_id", "")
+                if bid in seen_img_blocks:
+                    continue
+                fnames = self._ordered_png_placeholder_fnames(b)
+                if fnames:
+                    seen_img_blocks.add(bid)
+                    for fname in fnames:
+                        order.append(fname)
+                for cid in b.get("children", []):
+                    cb = by_id.get(cid)
+                    if cb:
+                        walk([cb])
+
+        walk(blocks)
+        return order
+
+    def _scan_template_and_compare(self, template_params: set[str]) -> None:
+        impl = IMPLEMENTED_TEXT_PARAMS
+        planned = PLANNED_M1_MTD_PARAMS
+        ok = sorted(template_params & impl)
+        pending = sorted(template_params & planned)
+        unknown = sorted(template_params - impl - planned)
+        unused = sorted(impl - template_params)
+        print("\n" + "─" * 72)
+        print("[比对] 模板 `{占位符}` ↔ 脚本注册表（已重新解析 wiki）")
+        print(f"       模板文本占位符共 {len(template_params)} 个")
+        print(f"       · 已实现且模板使用: {len(ok)} → {', '.join(ok) if ok else '（无）'}")
+        print(f"       · 已规划待接入代码: {len(pending)} → {', '.join(pending) if pending else '（无）'}")
+        if unknown:
+            print(f"       · ⚠ 模板有但脚本未注册: {len(unknown)} → {', '.join(unknown)}")
+        else:
+            print("       · ⚠ 模板有但脚本未注册: （无）")
+        print(f"       · 脚本已实现、模板本次未出现: {len(unused)} 个")
+        if unused:
+            tail = unused if len(unused) <= 24 else unused[:24] + [f"…共{len(unused)}项"]
+            print(f"         → {', '.join(tail)}")
+        print("─" * 72)
+
+    def _prompt_continue_after_template_scan(self, template_params: set[str], skip_prompt: bool) -> bool:
+        env_skip = os.environ.get("FEISHU_REPORT_SKIP_PROMPT", "").strip().lower() in ("1", "true", "yes")
+        if skip_prompt or env_skip:
+            print("\n[确认] 跳过交互（--yes / FEISHU_REPORT_SKIP_PROMPT=1），继续计算并生成。")
+            return True
+        if not sys.stdin.isatty():
+            print("\n[确认] 非交互终端，自动继续计算并生成。")
+            return True
+        print("\n建议：每次修改飞书模板后均重新比对占位符并完成下方数据计算。")
+        ans = input("是否继续：计算插入参数并生成飞书文档？[Y/n]: ").strip().lower()
+        if ans in ("n", "no", "q", "quit"):
+            print("[中止] 已取消。")
+            return False
+        return True
+
+    def _print_insert_params_audit_table(
+        self, template_text_params: set[str], img_order: list[str], screenshots_dir: str
+    ) -> None:
+        def trunc(s: str, n: int) -> str:
+            s = str(s).replace("\n", " ")
+            return s if len(s) <= n else s[: n - 2] + ".."
+
+        shots = Path(screenshots_dir)
+        print("\n" + "=" * 118)
+        print("【插入参数对照表】含义 · 口径 · 本次取值 · 关联图表")
+        print("=" * 118)
+        print(
+            f"{'占位符':<24} {'状态':<10} {'含义':<20} {'口径与数据源':<42} {'本次值':<16} {'关联图表'}"
+        )
+        print("-" * 118)
+        for k in sorted(template_text_params):
+            spec = merge_spec_row(k)
+            val = self.params.get(k, "")
+            st = spec.get("status", "?")
+            if str(val).startswith("__") and str(val).endswith("__"):
+                st = "缺计算"
+            combo = trunc(spec["formula"], 28) + " | " + trunc(spec["source"], 12)
+            print(
+                f"{trunc(k, 24):<24} {trunc(st, 10):<10} {trunc(spec['label'], 20):<20} "
+                f"{combo:<42} {trunc(val, 16):<16} {trunc(spec['charts'], 36)}"
+            )
+        print("-" * 118)
+        print(f"（上表仅列出模板中出现的 {len(template_text_params)} 个文本占位符）")
+
+        unused_impl = sorted(IMPLEMENTED_TEXT_PARAMS - template_text_params)
+        if unused_impl:
+            print("\n【脚本已实现但本模板未引用】可选用入正文：")
+            print(", ".join(unused_impl))
+
+        print("\n" + "=" * 118)
+        print("【插图占位符】说明 · 建议关联文本参数 · 本地文件")
+        print("=" * 118)
+        seen = set()
+        for fname in img_order:
+            if fname in seen:
+                continue
+            seen.add(fname)
+            meta = PNG_PLACEHOLDER_SPECS.get(fname, {})
+            desc = meta.get("desc", "（未登记）")
+            ptxt = meta.get("params", "—")
+            miss = "" if (shots / fname).is_file() else " ⚠缺 screenshots 文件"
+            print(f"  · {fname}")
+            print(f"      {desc} | 建议参数: {ptxt}{miss}")
+        print("=" * 118 + "\n")
 
     def replace_params_in_text(self, text):
         """无样式场景的扁平字符串替换（不插入上升/下降；飞书正文样式请用 _param_replace_text_runs）。"""
@@ -1199,27 +1546,41 @@ class FeishuReportGenerator:
         else:
             print("       ✓ 未检出 MD Callout 围栏（Skill 规则 8：NOTE/WARNING/…）")
         print("       ✓ 图片：[*.png] → 上传 + replace_image（对齐 Skill TL;DR #10 思路）")
-        print("       ✓ 文本：*dif →「上升/下降」+ 加粗着色（pp 跟进；rate_prin_od_dif/rate_cnt_od_dif：>=0 红、<0 绿；其余 dif：>=0 绿、<0 红）")
+        print("       ✓ 文本：*dif →「上升/下降」+ 数值（下降为绝对值无负号）+ 加粗着色（pp 跟进；rate_prin_od_dif/rate_cnt_od_dif：>=0 红、<0 绿；其余 dif：>=0 绿、<0 红）")
 
     # ==================== 主流程 ====================
 
-    def generate_report(self, wiki_url, screenshots_dir, output_title=None):
+    def generate_report(
+        self,
+        wiki_url,
+        screenshots_dir,
+        output_title=None,
+        skip_prompt=False,
+        strict_placeholders: bool = False,
+    ):
         print("=" * 70)
         print("飞书周报文档生成器")
         print("=" * 70)
 
-        self.calculate_all_params()
+        strict_ph = strict_placeholders or os.environ.get(
+            "FEISHU_STRICT_PLACEHOLDERS", ""
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if strict_ph:
+            print("[模式] FEISHU_STRICT_PLACEHOLDERS / --strict：未注册或未成算的 `{占位符}` 将直接中止。\n")
 
-        print("[1/5] 获取访问令牌...")
+        self._audit_template_text_params = set()
+        self._audit_img_order = []
+
+        print("[1/7] 获取访问令牌...")
         if not self.get_tenant_access_token():
             print("[ERR] 认证失败")
             return None
         print("[OK] 认证成功\n")
 
         # ============================================================
-        # 模板分析步骤
+        # 先拉模板 → 解析占位符 → 比对注册表 → 确认后再计算参数
         # ============================================================
-        print("[2/5] 分析模板...")
+        print("[2/7] 拉取 wiki 模板并解析 `{占位符}` / `[*.png]` …")
         wt = wiki_url.split("/wiki/")[-1].split("?")[0] if "/wiki/" in wiki_url else wiki_url.split("/docx/")[-1].split("?")[0]
         doc_id_tpl = self.get_wiki_document_id(wt)
         if not doc_id_tpl:
@@ -1232,7 +1593,6 @@ class FeishuReportGenerator:
         print(f"[OK] 获取 {len(blocks_tpl)} 个块")
         self._print_feishu_doc_guide_alignment(blocks_tpl)
 
-        # 分析: 文档结构
         page_tpl = next((b for b in blocks_tpl if b.get("block_type") == 1), None)
         if page_tpl:
             root_ids_tpl = page_tpl.get("children", [])
@@ -1246,38 +1606,86 @@ class FeishuReportGenerator:
             if len(root_ids_tpl) > 5:
                 print(f"       ... 还有 {len(root_ids_tpl)-5} 个块")
 
-        # 分析: 参数占位符
-        all_params = set()
+        all_params = self._extract_text_placeholders_from_blocks(blocks_tpl)
         all_imgs = set()
         for b in blocks_tpl:
             text = self._get_block_text(b)
-            for m in re.finditer(r'\{(\w+)\}', text):
-                all_params.add(m.group(1))
-            for m in re.finditer(r'\[([^\]]+\.png)\]', text):
+            for m in re.finditer(r"\[([^\]]+\.png)\]", text):
                 all_imgs.add(m.group(1))
-        print(f"[参数] 文本占位符: {', '.join(sorted(all_params))}")
-        print(f"[参数] 图片占位符: {len(all_imgs)} 个")
+        img_ph_order_tpl = self._collect_img_placeholder_order_from_blocks(blocks_tpl)
+        for fn in img_ph_order_tpl:
+            all_imgs.add(fn)
 
-        # 检查是否有未定义的参数
+        self._audit_template_text_params = set(all_params)
+        self._audit_img_order = list(img_ph_order_tpl)
+
+        print(f"[解析] 文本占位符 {len(all_params)} 个: {', '.join(sorted(all_params))}")
+        print(f"[解析] 图片占位符 {len(all_imgs)} 个（有序遍历 {len(img_ph_order_tpl)} 处）")
+
+        self._scan_template_and_compare(all_params)
+
+        impl = IMPLEMENTED_TEXT_PARAMS
+        planned = PLANNED_M1_MTD_PARAMS
+        unknown_tpl = sorted(all_params - impl - planned)
+        pending_in_tpl = sorted(all_params & planned)
+        if strict_ph:
+            if unknown_tpl:
+                print(
+                    "[ERR] 严格模式：模板含有未在 feishu_param_specs 登记的占位符 → "
+                    "请在 calculate_data_params（或专项函数）中实现计算并加入 IMPLEMENTED_TEXT_PARAMS："
+                )
+                print("       " + ", ".join(unknown_tpl))
+                return None
+            if pending_in_tpl:
+                print(
+                    "[ERR] 严格模式：模板仍在使用「待规划」占位符 → 请先实现计算并从 PLANNED_* 移入已实现集合："
+                )
+                print("       " + ", ".join(pending_in_tpl))
+                return None
+
+        if not self._prompt_continue_after_template_scan(all_params, skip_prompt):
+            return None
+
+        print("\n[3/7] 计算插入参数（data/*.json → `generate_feishu_report`）…")
+        self.calculate_all_params()
+
         defined_params = set(self.params.keys())
         undefined = all_params - defined_params
         if undefined:
-            print(f"[WARN] 未定义的参数: {', '.join(sorted(undefined))}")
-            # 为未定义参数添加默认值
+            msg = f"计算后仍无值的模板占位符: {', '.join(sorted(undefined))}"
+            if strict_ph:
+                print(f"[ERR] 严格模式：{msg}")
+                print("       请在 calculate_all_params / calculate_data_params 中为上述键赋值。")
+                return None
+            print(f"[WARN] {msg}")
             for p in undefined:
                 self.params[p] = f"__{p}__"
-                print(f"       -> 使用默认占位: {p} = __{p}__")
+                print(f"       -> 临时占位: {p} = __{p}__")
 
-        # 检查图表是否齐全
+        if strict_ph:
+            stale = [
+                k
+                for k in sorted(all_params)
+                if k in self.params
+                and str(self.params[k]).startswith("__")
+                and str(self.params[k]).endswith("__")
+            ]
+            if stale:
+                print(
+                    "[ERR] 严格模式：下列占位符取值仍为 __名字__（异常分支或漏算），禁止生成文档："
+                )
+                print("       " + ", ".join(stale))
+                return None
+
         screenshots_path = Path(screenshots_dir)
-        missing_imgs = [img for img in all_imgs if not (screenshots_path / img).exists()]
+        missing_imgs = [img for img in sorted(all_imgs) if not (screenshots_path / img).exists()]
         if missing_imgs:
-            print(f"[WARN] 缺失图表: {', '.join(missing_imgs)}")
+            print(f"[WARN] 缺失图表文件: {', '.join(missing_imgs)}")
         else:
-            print(f"[OK] 全部 {len(all_imgs)} 张图表就绪")
+            print(f"[OK] 模板涉及的 {len(all_imgs)} 张 PNG 在 screenshots/ 中均已找到")
         print()
 
-        print("[3/6] 读取模板内容...")
+        print("[4/7] 读取模板内容（生成副本）…")
         wt = wiki_url.split("/wiki/")[-1].split("?")[0] if "/wiki/" in wiki_url else wiki_url.split("/docx/")[-1].split("?")[0]
         doc_id = self.get_wiki_document_id(wt)
         if not doc_id:
@@ -1334,6 +1742,11 @@ class FeishuReportGenerator:
                 print(f"文档: {cr['title']}")
                 print(f"链接: {cr['url']}")
                 print("=" * 70)
+                self._print_insert_params_audit_table(
+                    self._audit_template_text_params,
+                    self._audit_img_order,
+                    screenshots_dir,
+                )
                 return cr
             print("   [copy] 复制模板不可用，改用空白文档逐块克隆（原生标题编号无法继承）")
 
@@ -1353,7 +1766,7 @@ class FeishuReportGenerator:
         # 单次遍历模板，构建有序写入计划
         # 保持grid和普通块在root children中的原始顺序
         # ============================================================
-        print("[4/6] 解析模板结构...")
+        print("[5/7] 解析模板结构…")
 
         # ---- 单次遍历 root_children_ids，构建有序写入计划 ----
         # write_plan 中每个元素:
@@ -1440,7 +1853,7 @@ class FeishuReportGenerator:
         #  按write_plan顺序写入
         # ============================================================
 
-        print("[5/6] 创建并写入文档...")
+        print("[6/7] 创建并写入文档…")
         nd = self.create_document(output_title)
         if not nd:
             print("[ERR] 文档创建失败")
@@ -1609,7 +2022,7 @@ class FeishuReportGenerator:
         # ============================================================
         # 上传图片
         # ============================================================
-        print("\n[上传图片]...")
+        print("\n[7/7] 上传插图…")
 
         # 如果存在未映射的图片块，重新扫描文档中所有image块作为后备
         unmapped_names = [n for n in img_placeholder_order if not img_placeholder_map.get(n)]
@@ -1650,6 +2063,11 @@ class FeishuReportGenerator:
         print(f"文档: {output_title}")
         print(f"链接: {nd_url}")
         print("=" * 70)
+        self._print_insert_params_audit_table(
+            self._audit_template_text_params,
+            self._audit_img_order,
+            screenshots_dir,
+        )
         return {"document_id": nd_id, "url": nd_url, "title": output_title}
 
     def _prepare_png_for_feishu(self, img_path: str) -> tuple[bytes, str, int, int]:
@@ -1741,7 +2159,23 @@ class FeishuReportGenerator:
 
 
 def main():
+    import argparse
     import webbrowser
+
+    ap = argparse.ArgumentParser(description="飞书周报：拉模板占位符 → 比对 → 计算参数 → 生成文档")
+    ap.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="跳过「是否继续计算并生成」的交互确认（等价于 FEISHU_REPORT_SKIP_PROMPT=1）",
+    )
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="占位符严格模式：模板出现未登记/待规划键，或计算后缺值、仍为 __键__ 时中止（等价 FEISHU_STRICT_PLACEHOLDERS=1）",
+    )
+    args = ap.parse_args()
+
     aid, sec = load_feishu_app_credentials(_PROJECT_ROOT)
     if not aid or not sec:
         print(FEISHU_CREDENTIALS_HELP)
@@ -1750,12 +2184,15 @@ def main():
     r = g.generate_report(
         "https://fintopia.feishu.cn/wiki/WHruwVACAi8nWPkXYgQcrLhHnFb",
         str(_PROJECT_ROOT / "screenshots"),
+        skip_prompt=args.yes,
+        strict_placeholders=args.strict,
     )
     if r:
         print("\n[OK] 周报生成成功!")
         webbrowser.open(r["url"])
     else:
         print("\n[ERR] 周报生成失败")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

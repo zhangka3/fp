@@ -92,8 +92,13 @@ run_all.bat
 
 ```bash
 cd code/python/06_generate_feishu
-python generate_feishu_report.py
+python generate_feishu_report.py          # 交互确认「是否继续」
+python generate_feishu_report.py -y        # 跳过确认，直接生成
+python generate_feishu_report.py -y --strict   # 占位符须全部登记且成算，否则中止（FEISHU_STRICT_PLACEHOLDERS=1）
 ```
+
+- 文本占位符登记与口径说明：**`code/python/06_generate_feishu/feishu_param_specs.py`**
+- 完整流水线、前置检查与飞书策略：项目根 **`.claude/skills/wkrpt.md`**（改稿后执行 **`python scripts/sync_wkrpt_skills.py`** 同步 Cursor 端 **`/.cursor/skills/wkrpt/SKILL.md`**）
 
 ## 数据类型说明
 

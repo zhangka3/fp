@@ -1,6 +1,6 @@
 ---
 name: wkrpt
-description: 周报自动化 — SQL→JSON→（可选行数检查）→校验→图表→（可选飞书 Docx：默认优先 **知识库 wiki 节点整篇复制** 模板 `WHruwVACAi8nWPkXYgQcrLhHnFb` 所在空间，以保留标题多级编号、**高亮块 / 引用** 等原生样式；需应用对该知识空间具备可编辑级权限，否则常见 131006 并回退云盘复制或空白文档克隆；`FEISHU_REPORT_USE_CLONE=1` 强制克隆）。`analyze_template.py` 与 `generate_feishu_report.py` 的 Wiki URL 须保持一致。飞书插图按磁盘原文件字节上传；replace_image 显式传宽高（PNG IHDR / 可选 Pillow），避免开放平台偶发 100px 兜底导致极小图；正文 `*dif` 占位符可渲染为「上升/下降」加粗着色（`rate_prin_od_dif`/`rate_cnt_od_dif` 颜色与催回类相反）。首次须输出前置条件表并按 A～I 分项自检；可选 Git 同步前须让用户选择 GitHub / Gitee / 两者。不含 HTML 预览方案。
+description: 周报自动化 — SQL→JSON→（可选行数检查）→校验→图表→（可选飞书 Docx：默认优先 **知识库 wiki 节点整篇复制** 模板 `WHruwVACAi8nWPkXYgQcrLhHnFb`；`analyze_template.py` 与 `generate_feishu_report.py` 的 Wiki URL 须一致）。飞书：`feishu_param_specs.py` 登记文本占位符；`--strict` / `FEISHU_STRICT_PLACEHOLDERS=1` 禁止未注册或未成算的 `{占位符}`；以 `dif` 结尾的占位符在正文展开为「上升/下降」+ 数值（下降为绝对值、无负号）+ 可选 `pp`，加粗着色（`rate_prin_od_dif`/`rate_cnt_od_dif` 与催回类相反）；生成成功末尾打印「插入参数对照表」与插图说明（终端 stdout）。首次须输出前置条件表并按 A～I 分项自检；Git 同步前让用户选择 GitHub / Gitee / 两者。不含 HTML 预览方案。
 ---
 
 # 周报自动化（wkrpt）
@@ -90,6 +90,7 @@ python code/python/055_analyze_template/analyze_template.py
 
 # 7) 可选：飞书周报（需 H/G；会打开浏览器到新文档）
 python code/python/06_generate_feishu/generate_feishu_report.py
+#    跳过确认：加 -y；占位符必须全部成算否则中止：加 --strict（或 FEISHU_STRICT_PLACEHOLDERS=1）
 ```
 
 ---
@@ -110,7 +111,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 ### 步骤 1：执行 SQL 并落盘 JSON
 
 - 脚本：`code/python/01_execute_sql/run_all.py`
-- 行为：读取 `code/sql/` 下**全部** `*.sql`（当前 **16** 条，含 `14_full_call.sql` → `full_call.json`、`15_conect_rate.sql` → `conect_rate.json`、`16_precall_task.sql` → `precall_task.json`），经 MCP **`tools/call`** 调用 **`submit_query` → `get_query_status` → `get_query_result`**，写入 `data/<basename>.json`（文件名形如 `NN_xxx.sql` 时去掉数字前缀 → `xxx.json`，与脚本内规则一致）。
+- 行为：读取 `code/sql/` 下**全部** `*.sql`（当前 **17** 条，含 `14_full_call`→`full_call`、`15_conect_rate`→`conect_rate`、`16_precall_task`→`precall_task`、`17_precall_afterkeep`→`precall_afterkeep`），经 MCP **`tools/call`** 调用 **`submit_query` → `get_query_status` → `get_query_result`**，写入 `data/<basename>.json`（文件名形如 `NN_xxx.sql` 时去掉数字前缀 → `xxx.json`，与脚本内规则一致）。
 - 常用：`--list` 列 SQL；`python run_all.py 01_s_class_all` 单跑一条。
 - SQL 使用 Hive 侧动态日期，一般**无需手改日期**。
 
@@ -140,7 +141,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
   - `python code/screens/run_all_screens.py --list` 列出脚本；可传过滤参数只跑其一（见脚本 `--help`）。  
   - **清理策略**：**全量**（无过滤且未带 `--no-clean`）时，在跑第一个脚本前 **一次性删除 `screenshots/*.png`**；各 `screen_*.py` **不再单独 cleanup**，后续仅覆盖同名文件。**部分脚本**（有过滤）或 **`--no-clean`**：跳过全量删除，便于只更新部分图（单独直接运行某个 `screen_*.py` 时同理，不自动清空目录）。
 - **输出目录**：项目根 `screenshots/`（各 `screen_*.py` 内定义文件名）。
-- **图表数量**：以 `run_all_screens.py` 当次汇总为准（人均模块最多 **3** 张 PNG，取决于 `data/` 中是否存在对应 JSON）。含 **M2 / M2–M6**（`screen_m2_m6.py`，4 张）、**`screen_case_stock.py`（1 张九宫格）**、**`screen_full_call.py`（4 张）**、**`screen_call_type_weekly.py`（1 张）**、**`screen_precall_task.py`（1 张预测试任务）** 等后，`screenshots/` 常见合计约 **40～56** 张；**飞书 wiki 当前模板**插图占位约 **39** 处（以步骤 **5.5** 的 `template_analysis.json` 为准）。
+- **图表数量**：以 `run_all_screens.py` 当次汇总为准（人均模块最多 **3** 张 PNG，取决于 `data/` 中是否存在对应 JSON）。含 **M2 / M2–M6**（`screen_m2_m6.py`，4 张）、**`screen_case_stock.py`（1 张九宫格）**、**`screen_full_call.py`（4 张）**、**`screen_call_type_weekly.py`（1 张）**、**`screen_precall_task.py`**、**`screen_precall_afterkeep.py`** 等后，`screenshots/` 常见合计约 **40～56** 张；**飞书 wiki 当前模板**插图数以步骤 **5.5** 的 `template_analysis.json` 为准（常见约 **40** 处）。
 
 ### 步骤 6（可选）：Git 推远端
 
@@ -156,7 +157,9 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 ### 步骤 7（可选）：飞书 Docx 周报
 
 - **脚本**：`code/python/06_generate_feishu/generate_feishu_report.py`
+- **参数登记**：同目录 **`feishu_param_specs.py`**（`IMPLEMENTED_TEXT_PARAMS`、`TEXT_PARAM_SPECS`、`PNG_PLACEHOLDER_SPECS`）；模板新增 `{占位符}` 须在此登记并实现 `calculate_data_params` 中的计算。
 - **依赖**：步骤 1～5 已完成；**建议先跑步骤 5.5**，确认占位图齐全；`feishu_app.json`；**`requests`（插图上传使用内置 multipart：`files` + `data`，无需 `requests_toolbelt`）**；可选 **`Pillow`**（仅在无法从 PNG 文件头解析宽高时起兜底作用）。
+- **交互与严格模式**：默认可能对「是否继续」交互确认；**`-y` / `--yes`** 或 **`FEISHU_REPORT_SKIP_PROMPT=1`** 跳过。**`--strict`** 或 **`FEISHU_STRICT_PLACEHOLDERS=1`**：模板含未登记/待规划占位符，或计算后仍缺键、取值仍为 `__键__` 时**中止**（不设临时占位）；生成失败时 **`main()` 以非零退出码结束**。
 - **生成策略（默认优先「整篇复制模板」）**  
   脚本会**先尝试保留模板文档级样式**（含客户端侧的 **标题多级编号**、有序列表样式等），失败后再回退到「空白文档 + 逐块克隆」。
   1. **知识库模板（URL 含 `/wiki/`）**  
@@ -175,10 +178,11 @@ python code/python/06_generate_feishu/generate_feishu_report.py
   - **同一段落内多个 `[*.png]`**（如 `[a.png][b.png]` 紧挨在同一文本块、中间可空白）：按从左到右顺序识别，**一次删块插入多张图**，避免只认「整段恰好一对括号」导致漏图。  
   - 默认新文档标题：**`催收周报（yyyy-MM-dd）_{Unix时间戳}`**（未显式传入 `output_title` 时，见 `generate_report`），减少与历史副本重名。  
   - **`{参数}` 富文本替换（复制模式 `dfs_patch` 与克隆 `_clone_elements` 共用 `_param_replace_text_runs`）**  
-    - 占位符名以 **`dif` 结尾**（如 `wk_colrate7d_dif`、`mth_ind1_ratio_dif`）：若替换值可解析为**数字**（去 `%`、逗号，支持 Unicode 负号），则输出 **`上升` 或 `下降` + 原参数字符串**（**≥0 → 上升**，**&lt;0 → 下降**）；**紧跟占位符后的字面量 `pp`（若模板中有）**一并纳入同一 `text_run`，**加粗**并着色：**≥0 绿（`text_color` 枚举 4）**、**&lt;0 红（枚举 1）**。  
+    - 占位符名以 **`dif` 结尾**（如 `wk_colrate7d_dif`、`mth_ind1_ratio_dif`）：若替换值可解析为**数字**（去 `%`、逗号，支持 Unicode 负号），则输出 **`上升` 或 `下降` + 展示用数值**（两位小数；**≥0 → 上升 + `f"{num:.2f}"`**，**&lt;0 → 下降 + `f"{abs(num):.2f}"`**，**下降不带负号**）；**紧跟占位符后的字面量 `pp`（若模板中有）**一并纳入同一 `text_run`，**加粗**并着色：**≥0 绿（`text_color` 枚举 4）**、**&lt;0 红（枚举 1）**（颜色仍以原始差分正负判定，与展示字符串是否含负号无关）。  
     - **例外（逾期率差分，与催回类「好绿坏红」相反）**：**`rate_prin_od_dif`**、**`rate_cnt_od_dif`** 仍为上述「上升/下降」文案，但颜色为 **≥0 红、&lt;0 绿**。  
     - **非数值**的 `*dif`：不做上升/下降、不着色，仅普通文本替换。  
     - **不以 `dif` 结尾**的参数：普通替换，继承原 `text_run` 样式。  
+  - **流程日志**：拉模板后会 **`[比对]`** 模板 `{占位符}` 与 `IMPLEMENTED_TEXT_PARAMS`；**生成成功结束**时打印 **「插入参数对照表」**（含义、口径、本次值、关联图）与 **「插图占位符」** 说明（终端 stdout，宽表需横向滚动或重定向到文件查看）。
   - 运行开始会打印 **`[doc-guide]`** 与飞书 block/Markdown 差异相关的**自检说明**（与 Cursor 内 **feishu-cli-doc-guide** Skill 对齐思路）；模板中请勿依赖本脚本不支持的 Markdown 围栏（如 mermaid）作为唯一呈现手段。
 - **Wiki 地址**：`generate_feishu_report.py` → `main()` 内默认 **`https://fintopia.feishu.cn/wiki/WHruwVACAi8nWPkXYgQcrLhHnFb`**。更换模板时请同步修改 **`code/python/055_analyze_template/analyze_template.py`** 的 **`WIKI_URL`**，再跑步骤 5.5。
 - **说明**：飞书 **Docx 不支持嵌入自定义 HTML 整页**；周报以 **飞书原生块 + 上传 PNG** 为准，**无**仓库内 HTML 镜像生成步骤。**标题编号**：要与模板完全一致，依赖 **复制模板** 成功；仅克隆模式下勿指望客户端多级标题编号自动出现。
@@ -207,6 +211,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 | `14_full_call.sql` | `full_call.json` | 生产力周表：`tmp_export.case_productivity_2025`，**`year`+周+`concat(case_type,'-',rank_type)` 作 `case_type`**，含 **`lag`/周环比 `*_dif`**；出图 **`screen_full_call.py`**（详见 `code/sql/README.md`） |
 | `15_conect_rate.sql` | `conect_rate.json` | 拨打模式周度：`tmp_export.col_phone_quality`，**`year`+`week_num`+`call_type`**；出图 **`screen_call_type_weekly.py`** |
 | `16_precall_task.sql` | `precall_task.json` | 预测试任务按日 × **手工/全时** × **stage**：接通率、呼损率、有效时长利用率、人工接通 VM 占比等（约近 **60** 日）；出图 **`screen_precall_task.py`** → **`precall_task_trends.png`** |
+| `17_precall_afterkeep.sql` | `precall_afterkeep.json` | 留案与留案后外呼等指标；出图 **`screen_precall_afterkeep.py`** → **`precall_afterkeep_trends.png`** |
 
 历史 Query ID 可参考 `code/sql/README.md`，**以线上查询计划为准**，不必与文档表逐字一致。
 
@@ -224,8 +229,9 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 | `screen_full_call.py` | `full_call.json` | `full_call_full_rates.png`、`full_call_avg_calls_per_case.png`、`full_call_avg_dur_per_case.png`、`full_call_eff_rates.png`（满频 / 案均拨打 / 案均通时 / 接通率，最近 5 周；见 `code/screens/README.md`） | 4 |
 | `screen_call_type_weekly.py` | `conect_rate.json` | `call_type_weekly_connect.png` | 1 |
 | **`screen_precall_task.py`** | **`precall_task.json`** | **`precall_task_trends.png`**（**4 行指标 × 列**：手工各 stage **+ 中间 1 cm 空白 +** 全时各 stage；stage 顺序 **RA→…→M5**；相邻 stage **细**竖线、**手工/全时**分界 **粗**竖线；折线仅连**有数据日期**不插值） | 1 |
+| **`screen_precall_afterkeep.py`** | **`precall_afterkeep.json`** | **`precall_afterkeep_trends.png`** | 1 |
 
-**PNG 总量**：以 `run_all_screens.py` 当次汇总为准；在含 M2/M6、人均、`case_stock`、**`full_call` 四图**、**`call_type_weekly_connect`** 与 **`precall_task_trends`** 等前提下 **`screenshots/`** 常见 **40～56** 张；**飞书模板**插图数以 **`template_analysis.json`** 为准（当前约 **39**）。
+**PNG 总量**：以 `run_all_screens.py` 当次汇总为准；在含 M2/M6、人均、`case_stock`、**`full_call` 四图**、**`call_type_weekly_connect`**、**`precall_task_trends`**、**`precall_afterkeep_trends`** 等前提下 **`screenshots/`** 常见 **40～56** 张；**飞书模板**插图数以 **`template_analysis.json`** 为准（常见约 **40**）。
 
 ---
 
@@ -260,8 +266,12 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 | `mth_colrate7d_ind0` / `mth_colrate7d_ind0_dif` | 非合并用户 7d 月催回率及环比差（与 `m0_collection_rate_7d_30d_monthly_ind0.png` 口径一致） |
 | `mth_colrate7d_ind1` / `mth_colrate7d_ind1_dif` | 合并用户 7d 月催回率及环比差（与 `ind1` 图一致） |
 | `mth_ind1_ratio` / `mth1_ind1_ratio` / `mth_ind1_ratio_dif` | 当前月 / 上一月 IND1 金额占比（%）及差（百分点，非 `dif` 着色规则时仍可能以 `dif` 结尾走着色逻辑） |
+| `mth_mtdcolrate_m1` / `mth_mtdcolrate_m1_dif` | M1 分案 MTD 累积回款率（整体）及环比（百分点）；数据源 **`m1_assignment_repayment.json`**，与 assignment 图口径一致；环比 **同日锚定**（上月无同日则上月最后有效日） |
+| `mth_mtdcolrate_m1new*` / `mth_mtdcolrate_m1old*` | M1 **新案 / 老案** MTD 率及 `*_dif`（数据源同上，按 `case_type` 过滤） |
+| `mth_mtdcolrate_m2` / `mth_mtdcolrate_m2_dif` | **M2** MTD 累积回款率及环比；**`M2_class_all.json`**，与 `recovery_rate_M2_*` 图一致 |
+| `mth_mtdcolrate_m2m6` | **M2–M6** MTD 累积回款率；**`M6_class_all.json`**，与 `recovery_rate_M6_*` 图一致 |
 
-审计用：`python code/python/06_generate_feishu/_audit_params.py`（仅打印，不发飞书）。
+完整登记与插图关联见 **`feishu_param_specs.py`**。审计用：`python code/python/06_generate_feishu/_audit_params.py`（仅打印，不发飞书）。
 
 ---
 
@@ -276,6 +286,7 @@ python code/python/06_generate_feishu/generate_feishu_report.py
 - **case_stock**：`screen_case_stock.py`；堆叠顺序 **S1→S2→S3**，组内 **RA→RB→RC→RD**；第一行第三列 **堆叠**用第 1、2 列「折线」人均库存序列，**红线与该行第三列表**为 **不拆分 `col_type`** 的整体 `line_metrics`（与柱总高度不一定相等）；第二、三行仅柱、无折线；详见 `code/screens/README.md`。
 - **full_call**：`screen_full_call.py`；**最近 5 周**；**每 `case_type` 单独折线**（不跨类）、**每类每周一柱**为 `*_dif`；**最近一周无数据则剔除该类型**；**上图**最近 3 周标具体值（满频/接通为 **%**，案均拨打为**次/案**，案均通时为**秒/案**）无框无底、**下图**最近 3 周标环比（率类为 pp，案均类为原单位差）；**无图例**；**`case_type` 写在轴框上方**免挡标注；**纵轴无刻度字**、**仅第三带下图**显示横轴周标签；详见 `code/screens/README.md`。
 - **precall_task**：`screen_precall_task.py`；**行＝四指标**（接通率 / 呼损率 / 有效时间利用率 / 人工接通 VM 占比），**列＝手工各 stage + 1 cm 空白 + 全时各 stage**；列内 stage 顺序 **RA→RB→RC→RD→S2→S3→M2→M4→M5**（仅数据中存在的项）；**不向时间序列插值**，仅连接有观测日；横轴无刻度；详见 `code/screens/README.md`。
+- **precall_afterkeep**：`screen_precall_afterkeep.py` → **`precall_afterkeep_trends.png`**（数据源 **`precall_afterkeep.json`** / **`17_precall_afterkeep.sql`**）；详见 `code/screens/README.md`。
 
 ---
 
@@ -362,7 +373,8 @@ python screen_precall_task.py
 
 ## 更新记录
 
-- **2026-05-06（预测试任务 SQL16 + 图 + 校验 + 飞书插图）**：新增 **`16_precall_task.sql` → `precall_task.json`**；**`validate_data`** 注册 **`precall_task.json`**；**`screen_precall_task.py` → `precall_task_trends.png`**（版式与分隔线规则见上表）；飞书模板占位 **`[precall_task_trends.png]`**（插图位约 **39**，以 **5.5** 为准）。
+- **2026-05-06（飞书：`*dif` 展示、`feishu_param_specs`、严格模式、MTD 占位符）**：正文 **`*dif`**：**下降**时数值为**绝对值、无负号**（仍为红/绿着色逻辑）；新增 **`feishu_param_specs.py`** 统一 **`IMPLEMENTED_TEXT_PARAMS`** / 口径说明 / PNG 关联；**`--strict`** / **`FEISHU_STRICT_PLACEHOLDERS`**；**`mth_mtdcolrate_*`**（M1/M2/M2–M6 MTD 回款率及环比，与 assignment / M2/M6 图口径对齐）；生成成功末尾打印 **插入参数对照表** 与 **插图说明**；SQL **17** 条（含 **`17_precall_afterkeep`**）。
+- **2026-05-06（预测试任务 SQL16 + 图 + 校验 + 飞书插图）**：新增 **`16_precall_task.sql` → `precall_task.json`**；**`validate_data`** 注册 **`precall_task.json`**；**`screen_precall_task.py` → `precall_task_trends.png`**（版式与分隔线规则见上表）；飞书模板占位 **`[precall_task_trends.png]`**（插图数以 **5.5** 为准）。
 - **2026-05-05（M0 月同期 cutoff 柱线统一 + `M0_SP_NO_FALLBACK`）**：月度「按月同期」**柱与折线共用 `cutoff_day`**；月初无 **7d** 成熟起点时 **回退** `min(上月末, fetch−8)` 并 **跳过当月折线**，控制台固定提示；环境变量 **`M0_SP_NO_FALLBACK`** 与 **`screen_m0` / `generate_feishu_report`** 对齐；标题 **截至 X 号**；本节替换旧「柱至上月末」描述。
 - **2026-04-30（M0 成熟度口径锁死）**：Skill 增补 **周度 `week_end+N <= fetch`**、**月度日历截断 `billing_date ≤ fetch−N`**，避免改代码或对照飞书时再引入 **严格 `<` 与 `≤` 混用** 或「仅按号同期」类回归；故障表增加对应两行。
 - **2026-05-04（飞书 Docx 文本与模板）**：步骤 7 补充 **`*dif` 上升/下降 + 加粗着色**、**`rate_prin_od_dif` / `rate_cnt_od_dif` 颜色与催回类相反**、**同段多 `[*.png]`**、**默认标题** `催收周报（日期）_{Unix时间戳}`；关键业务增加 **`m0_billing_grouped` 派生占位符** 表；故障表增加多图说明；步骤 5 / PNG 总量区分 **全量出图张数** vs **wiki 模板插图位**（以 `template_analysis.json` 为准）。
@@ -376,4 +388,4 @@ python screen_precall_task.py
 - **2026-04-30**：Git 同步须用户选择远端；`screenshots` 不纳入版本库。
 - **2026-04-27 及更早**：人均工时 SQL/图表、metadata、M0 成熟度、GRP 美化等（详见历史提交与旧版 Skill）。
 
-**最后更新**：2026-05-06（预测试任务 precall_task；SQL **16**；飞书插图约 **39**；历史条目仍保留于上表）
+**最后更新**：2026-05-06（飞书 `*dif` 下降绝对值、`feishu_param_specs`、`--strict`、`mth_mtdcolrate_*`、对照表打印；SQL **17**；历史条目仍保留于上表）
